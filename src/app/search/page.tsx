@@ -469,7 +469,12 @@ function SearchPageInner() {
       const isRegex = searchMode === "regex";
 
       if (trimmed && !isRegex) {
-        const escaped = effectiveQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        // Treat "*" as a glob wildcard (any run of characters). Everything else —
+        // including "?" — is escaped so it matches literally (e.g. "really?").
+        const escaped = effectiveQuery
+          .split("*")
+          .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+          .join(".*");
         switch (searchMode) {
           case "starts_with": effectiveQuery = `\\b${escaped}`; break;
           case "ends_with": effectiveQuery = `${escaped}\\b`; break;
@@ -660,7 +665,12 @@ function SearchPageInner() {
       let effectiveQuery = trimmed;
       const isRegex = searchMode === "regex";
       if (trimmed && !isRegex) {
-        const escaped = effectiveQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        // Treat "*" as a glob wildcard (any run of characters). Everything else —
+        // including "?" — is escaped so it matches literally (e.g. "really?").
+        const escaped = effectiveQuery
+          .split("*")
+          .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
+          .join(".*");
         switch (searchMode) {
           case "starts_with": effectiveQuery = `\\b${escaped}`; break;
           case "ends_with": effectiveQuery = `${escaped}\\b`; break;
@@ -723,7 +733,7 @@ function SearchPageInner() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch(1)}
-              placeholder={searchMode === "regex" ? "Enter regex pattern..." : "Search messages..."}
+              placeholder={searchMode === "regex" ? "Enter regex pattern..." : "Search messages (use * as a wildcard)..."}
               className="w-full px-4 py-2 pr-8 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
             />
             {(query || results !== null) && (
