@@ -254,6 +254,32 @@ export async function getSources() {
   return rowsToObjects(result);
 }
 
+// Delete every source that has no messages (e.g. failed/empty imports), plus
+// their empty conversations and any participants left orphaned. Returns count removed.
+export async function deleteEmptySources(): Promise<number> {
+  const db = await getDb();
+  const idsRes = db.exec(
+    `SELECT s.id FROM sources s
+     WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.source_id = s.id)`
+  );
+  const ids: string[] = (idsRes[0]?.values || []).map((r: any[]) => r[0] as string);
+  if (ids.length === 0) return 0;
+  const inList = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+  db.run("BEGIN TRANSACTION");
+  try {
+    db.run(`DELETE FROM conversation_participants WHERE conversation_id IN (SELECT id FROM conversations WHERE source_id IN (${inList}))`);
+    db.run(`DELETE FROM conversations WHERE source_id IN (${inList})`);
+    db.run(`DELETE FROM sources WHERE id IN (${inList})`);
+    db.run(`DELETE FROM participants WHERE id NOT IN (SELECT DISTINCT participant_id FROM conversation_participants)`);
+    db.run("COMMIT");
+  } catch (e) {
+    db.run("ROLLBACK");
+    throw e;
+  }
+  scheduleSave();
+  return ids.length;
+}
+
 export async function deleteSource(sourceId: string) {
   const db = await getDb();
   const safeId = sourceId.replace(/'/g, "''");

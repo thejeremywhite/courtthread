@@ -54,6 +54,9 @@ export default function ImportPage() {
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<SourceRow[]>([]);
+  const [sourcePlatformFilter, setSourcePlatformFilter] = useState("");
+  const [sourceSort, setSourceSort] = useState<"recent" | "messages" | "name">("recent");
+  const [hideEmptySources, setHideEmptySources] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [tab, setTab] = useState<"browse" | "path" | "quick">("browse");
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
@@ -220,6 +223,29 @@ export default function ImportPage() {
       const res = await fetch("/api/clear", { method: "POST" });
       if (res.ok) { setSources([]); setImportResult(null); loadCases(); }
     } catch { /* ignore */ }
+  }
+
+  async function handleDeleteEmpty() {
+    const emptyCount = sources.filter((s) => (s.message_count || 0) === 0).length;
+    if (emptyCount === 0) return;
+    if (!confirm(`Remove ${emptyCount} empty source${emptyCount !== 1 ? "s" : ""} (0 messages)? This cannot be undone.`)) return;
+    try {
+      const res = await fetch("/api/sources/cleanup", { method: "POST" });
+      if (res.ok) loadSources();
+    } catch { /* ignore */ }
+  }
+
+  function platformLabel(fileType: string): { label: string; cls: string } {
+    if (fileType.startsWith("facebook")) return { label: "Facebook", cls: "bg-blue-500/20 text-blue-400" };
+    if (fileType === "sms-thread-txt" || fileType === "sms-xml") return { label: "SMS", cls: "bg-green-500/20 text-green-400" };
+    if (fileType === "calls-xml") return { label: "Calls", cls: "bg-amber-500/20 text-amber-400" };
+    if (fileType === "directory") return { label: "Folder", cls: "bg-purple-500/20 text-purple-400" };
+    return { label: fileType || "File", cls: "bg-[var(--secondary)] text-[var(--muted-foreground)]" };
+  }
+
+  function cleanSourceName(filename: string): string {
+    const base = filename.split(/[/\\]/).pop() || filename;
+    return base.replace(/\.(txt|html?|json|xml)$/i, "");
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -434,26 +460,78 @@ export default function ImportPage() {
             <button onClick={handleClearAll} className="text-[10px] text-[var(--destructive)] hover:underline">Clear All</button>
           )}
         </div>
+
+        {sources.length > 0 && (() => {
+          const emptyCount = sources.filter((s) => (s.message_count || 0) === 0).length;
+          const platforms = Array.from(new Set(sources.map((s) => platformLabel(s.file_type).label)));
+          return (
+            <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-[var(--border)] text-xs">
+              <select value={sourcePlatformFilter} onChange={(e) => setSourcePlatformFilter(e.target.value)}
+                className="px-2 py-1 rounded border border-[var(--border)] bg-[var(--background)]">
+                <option value="">All platforms</option>
+                {platforms.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+              <select value={sourceSort} onChange={(e) => setSourceSort(e.target.value as "recent" | "messages" | "name")}
+                className="px-2 py-1 rounded border border-[var(--border)] bg-[var(--background)]">
+                <option value="recent">Most recent</option>
+                <option value="messages">Most messages</option>
+                <option value="name">Name (A–Z)</option>
+              </select>
+              <label className="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" checked={hideEmptySources} onChange={(e) => setHideEmptySources(e.target.checked)} className="rounded" />
+                Hide empty
+              </label>
+              {emptyCount > 0 && (
+                <button onClick={handleDeleteEmpty}
+                  className="ml-auto px-2 py-1 rounded border border-[var(--destructive)] text-[var(--destructive)] hover:bg-[var(--destructive)]/10 transition">
+                  Remove {emptyCount} empty
+                </button>
+              )}
+            </div>
+          );
+        })()}
+
         {sources.length === 0 ? (
           <p className="text-sm text-[var(--muted-foreground)] text-center py-8">No data imported yet</p>
-        ) : (
-          <div className="divide-y divide-[var(--border)]/50">
-            {sources.map((src) => (
-              <div key={src.id} className="group flex items-center justify-between px-4 py-2.5 hover:bg-[var(--secondary)]/30 transition">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium truncate">{src.filename}</p>
-                  <p className="text-xs text-[var(--muted-foreground)]">
-                    {src.conversation_count} conv &middot; {(src.message_count || 0).toLocaleString()} msgs &middot; {formatSize(src.file_size)} &middot; {new Date(src.imported_at).toLocaleDateString()}
-                  </p>
-                </div>
-                <button onClick={() => handleDeleteSource(src.id, src.filename)}
-                  className="ml-3 text-xs text-[var(--destructive)] opacity-0 group-hover:opacity-100 transition hover:underline shrink-0">
-                  Delete
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        ) : (() => {
+          const displayed = sources
+            .filter((s) => !sourcePlatformFilter || platformLabel(s.file_type).label === sourcePlatformFilter)
+            .filter((s) => !hideEmptySources || (s.message_count || 0) > 0)
+            .sort((a, b) => {
+              if (sourceSort === "messages") return (b.message_count || 0) - (a.message_count || 0);
+              if (sourceSort === "name") return cleanSourceName(a.filename).localeCompare(cleanSourceName(b.filename));
+              return (b.imported_at || "").localeCompare(a.imported_at || "");
+            });
+          return (
+            <div className="divide-y divide-[var(--border)]/50 max-h-[60vh] overflow-y-auto">
+              {displayed.map((src) => {
+                const plat = platformLabel(src.file_type);
+                const isEmpty = (src.message_count || 0) === 0;
+                return (
+                  <div key={src.id} className="group flex items-center justify-between px-4 py-2.5 hover:bg-[var(--secondary)]/30 transition">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] ${plat.cls}`}>{plat.label}</span>
+                        <p className="text-sm font-medium truncate">{cleanSourceName(src.filename)}</p>
+                        {isEmpty && <span className="shrink-0 text-[10px] text-[var(--destructive)]">empty</span>}
+                      </div>
+                      <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                        {src.conversation_count} conv &middot; {(src.message_count || 0).toLocaleString()} msgs &middot; {formatSize(src.file_size)} &middot; {new Date(src.imported_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <button onClick={() => handleDeleteSource(src.id, src.filename)}
+                      className="ml-3 text-xs text-[var(--destructive)] opacity-0 group-hover:opacity-100 transition hover:underline shrink-0">
+                      Delete
+                    </button>
+                  </div>
+                );
+              })}
+              {displayed.length === 0 && (
+                <p className="text-sm text-[var(--muted-foreground)] text-center py-8">No sources match the current filter.</p>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* MOBILE: FAB + bottom drawer */}

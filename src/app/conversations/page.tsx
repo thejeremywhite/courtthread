@@ -100,6 +100,17 @@ export default function ConversationsPage() {
     setSearchQuery(value);
   }
 
+  async function handleDeleteConversation(convId: string, label: string) {
+    if (!confirm(`Delete the conversation "${label}" and all its messages? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/conversations/${convId}`, { method: "DELETE" });
+      if (res.ok) {
+        setConversations((prev) => prev.filter((c) => c.id !== convId));
+        setTotal((t) => Math.max(0, t - 1));
+      }
+    } catch { /* ignore */ }
+  }
+
   return (
     <div>
       <h1 className="text-3xl font-bold mb-2">Conversations</h1>
@@ -173,28 +184,35 @@ export default function ConversationsPage() {
       ) : (
         <div className="space-y-2">
           {conversations.map((conv) => (
-            <Link key={conv.id} href={`/conversations/${conv.id}`}
-              className="block rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:border-[var(--primary)] transition">
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={`px-2 py-0.5 rounded text-xs ${PLATFORM_COLORS[conv.platform] || "bg-gray-500 text-white"}`}>
-                      {conv.platform}
-                    </span>
-                    <h3 className="font-semibold truncate">{conv.title || "Untitled"}</h3>
+            <div key={conv.id} className="group relative rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)] transition">
+              <Link href={`/conversations/${conv.id}`} className="block p-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0 pr-16">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className={`px-2 py-0.5 rounded text-xs ${PLATFORM_COLORS[conv.platform] || "bg-gray-500 text-white"}`}>
+                        {conv.platform}
+                      </span>
+                      <h3 className="font-semibold truncate">{conv.title || "Untitled"}</h3>
+                    </div>
+                    {conv.participant_names && (
+                      <p className="text-sm text-[var(--muted-foreground)] truncate">{conv.participant_names}</p>
+                    )}
                   </div>
-                  {conv.participant_names && (
-                    <p className="text-sm text-[var(--muted-foreground)] truncate">{conv.participant_names}</p>
-                  )}
+                  <div className="text-right text-sm shrink-0 ml-4">
+                    <p className="font-medium">{(conv.message_count || 0).toLocaleString()} msgs</p>
+                    <p className="text-[var(--muted-foreground)] text-xs">
+                      {formatDate(conv.first_message_at)} — {formatDate(conv.last_message_at)}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right text-sm shrink-0 ml-4">
-                  <p className="font-medium">{(conv.message_count || 0).toLocaleString()} msgs</p>
-                  <p className="text-[var(--muted-foreground)] text-xs">
-                    {formatDate(conv.first_message_at)} — {formatDate(conv.last_message_at)}
-                  </p>
-                </div>
-              </div>
-            </Link>
+              </Link>
+              <button
+                onClick={() => handleDeleteConversation(conv.id, conv.title || conv.participant_names || "Untitled")}
+                className="absolute top-2 right-2 text-xs text-[var(--destructive)] opacity-0 group-hover:opacity-100 transition hover:underline px-2 py-1"
+                title="Delete this conversation">
+                Delete
+              </button>
+            </div>
           ))}
 
           <div ref={observerRef} className="h-10 flex items-center justify-center">
