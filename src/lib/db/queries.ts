@@ -4,7 +4,9 @@ export async function getStats() {
   const db = await getDb();
   const conversations = db.exec("SELECT COUNT(*) FROM conversations")[0]?.values[0]?.[0] as number || 0;
   const messages = db.exec("SELECT COUNT(*) FROM messages")[0]?.values[0]?.[0] as number || 0;
-  const participants = db.exec("SELECT COUNT(*) FROM participants")[0]?.values[0]?.[0] as number || 0;
+  // Count unique PEOPLE by name (the same person appears as a separate participant
+  // row in each import, so counting by id double-counts).
+  const participants = db.exec("SELECT COUNT(DISTINCT p.display_name) FROM participants p INNER JOIN conversation_participants cp ON p.id = cp.participant_id INNER JOIN conversations c ON cp.conversation_id = c.id")[0]?.values[0]?.[0] as number || 0;
   const sources = db.exec("SELECT COUNT(*) FROM sources")[0]?.values[0]?.[0] as number || 0;
   return { conversations, messages, participants, sources };
 }
@@ -227,16 +229,252 @@ export async function insertMessages(messages: Array<{
         msg.platform, msg.source_id, msg.source_index, msg.metadata
       ]);
 
-      if (msg.content) {
-        db.run(
-          `INSERT INTO messages_fts (rowid, content, sender_name)
-           SELECT m.rowid, m.content, COALESCE(p.display_name, '')
-           FROM messages m LEFT JOIN participants p ON m.sender_id = p.id
-           WHERE m.id = ?`,
-          [msg.id]
-        );
-      }
     }
+    db.run("COMMIT");
+  } catch (e) {
+    db.run("ROLLBACK");
+    throw e;
+  }
+  scheduleSave();
+}
+
+export async function getSources() {
+  const db = await getDb();
+  const result = db.exec(
+    `SELECT s.*,
+       (SELECT COUNT(*) FROM conversations c WHERE c.source_id = s.id) as conversation_count,
+       (SELECT COUNT(*) FROM messages m WHERE m.source_id = s.id) as message_count
+     FROM sources s
+     ORDER BY s.imported_at DESC`
+  );
+  return rowsToObjects(result);
+}
+
+export async function deleteSource(sourceId: string) {
+  const db = await getDb();
+  const safeId = sourceId.replace(/'/g, "''");
+  db.run("BEGIN TRANSACTION");
+  try {
+    db.run(`DELETE FROM messages WHERE source_id = '${safeId}'`);
+    db.run(`DELETE FROM conversation_participants WHERE conversation_id IN (SELECT id FROM conversations WHERE source_id = '${safeId}')`);
+    db.run(`DELETE FROM conversations WHERE source_id = '${safeId}'`);
+    db.run(`DELETE FROM participants WHERE id NOT IN (SELECT DISTINCT participant_id FROM conversation_participants)`);
+    db.run(`DELETE FROM sources WHERE id = '${safeId}'`);
+    db.run("COMMIT");
+  } catch (e) {
+    db.run("ROLLBACK");
+    throw e;
+  }
+  scheduleSave();
+}
+
+export async function deleteConversation(convId: string) {
+  const db = await getDb();
+  const safeId = convId.replace(/'/g, "''");
+  db.run("BEGIN TRANSACTION");
+  try {
+    db.run(`DELETE FROM messages WHERE conversation_id = '${safeId}'`);
+    db.run(`DELETE FROM conversation_participants WHERE conversation_id = '${safeId}'`);
+    db.run(`DELETE FROM conversations WHERE id = '${safeId}'`);
+    db.run("COMMIT");
+  } catch (e) {
+    db.run("ROLLBACK");
+    throw e;
+  }
+  scheduleSave();
+}
+
+export async function clearAll() {
+  const db = await getDb();
+  db.run("BEGIN TRANSACTION");
+  try {
+    db.run("DELETE FROM messages");
+    db.run("DELETE FROM media");
+    db.run("DELETE FROM corrections");
+    db.run("DELETE FROM conversation_participants");
+    db.run("DELETE FROM conversations");
+    db.run("DELETE FROM participants");
+    db.run("DELETE FROM sources");
+    db.run("DELETE FROM saved_filters");
+    db.run("DELETE FROM case_sections");
+    db.run("DELETE FROM cases");
+    db.run("COMMIT");
+  } catch (e) {
+    db.run("ROLLBACK");
+    throw e;
+  }
+  scheduleSave();
+}
+
+export async function getCases() {
+  const db = await getDb();
+  const result = db.exec(
+    `SELECT c.*,
+       (SELECT COUNT(*) FROM case_sections cs WHERE cs.case_id = c.id) as section_count,
+       (SELECT COUNT(*) FROM conversations cv WHERE cv.case_id = c.id) as conversation_count
+     FROM cases c
+     ORDER BY c.created_at DESC`
+  );
+  return rowsToObjects(result);
+}
+
+export async function createCase(data: {
+  id: string;
+  name: string;
+  court_file_number?: string;
+  court_name?: string;
+  parties?: string;
+}) {
+  const db = await getDb();
+  db.run(
+    `INSERT INTO cases (id, name, court_file_number, court_name, parties)
+     VALUES (?, ?, ?, ?, ?)`,
+    [data.id, data.name, data.court_file_number || null, data.court_name || null, data.parties || null]
+  );
+  scheduleSave();
+}
+
+export async function getCaseSections(caseId: string) {
+  const db = await getDb();
+  const safeId = caseId.replace(/'/g, "''");
+  const result = db.exec(
+    `SELECT cs.*,
+       (SELECT COUNT(*) FROM conversations cv WHERE cv.section_id = cs.id) as conversation_count
+     FROM case_sections cs
+     WHERE cs.case_id = '${safeId}'
+     ORDER BY cs.sort_order ASC, cs.created_at ASC`
+  );
+  return rowsToObjects(result);
+}
+
+export async function createCaseSection(data: {
+  id: string;
+  case_id: string;
+  name: string;
+  section_type?: string;
+  description?: string;
+  exhibit_prefix?: string;
+}) {
+  const db = await getDb();
+  const maxOrder = db.exec(
+    `SELECT COALESCE(MAX(sort_order), -1) + 1 FROM case_sections WHERE case_id = '${data.case_id.replace(/'/g, "''")}'`
+  );
+  const sortOrder = (maxOrder[0]?.values[0]?.[0] as number) || 0;
+
+  db.run(
+    `INSERT INTO case_sections (id, case_id, name, section_type, description, exhibit_prefix, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [data.id, data.case_id, data.name, data.section_type || "general", data.description || null, data.exhibit_prefix || null, sortOrder]
+  );
+  scheduleSave();
+}
+
+export async function deleteCase(caseId: string) {
+  const db = await getDb();
+  const safeId = caseId.replace(/'/g, "''");
+  db.run("BEGIN TRANSACTION");
+  try {
+    db.run(`UPDATE sources SET case_id = NULL, section_id = NULL WHERE case_id = '${safeId}'`);
+    db.run(`UPDATE conversations SET case_id = NULL, section_id = NULL WHERE case_id = '${safeId}'`);
+    db.run(`DELETE FROM case_sections WHERE case_id = '${safeId}'`);
+    db.run(`DELETE FROM cases WHERE id = '${safeId}'`);
+    db.run("COMMIT");
+  } catch (e) {
+    db.run("ROLLBACK");
+    throw e;
+  }
+  scheduleSave();
+}
+
+export async function getBookmarks(conversationId?: string) {
+  const db = await getDb();
+  const where = conversationId
+    ? `WHERE b.conversation_id = '${conversationId.replace(/'/g, "''")}'`
+    : "";
+  const result = db.exec(
+    `SELECT b.*, m.content, m.timestamp, m.is_incoming, p.display_name as sender_name,
+       c.title as conversation_title, c.platform
+     FROM bookmarks b
+     JOIN messages m ON b.message_id = m.id
+     LEFT JOIN participants p ON m.sender_id = p.id
+     LEFT JOIN conversations c ON b.conversation_id = c.id
+     ${where}
+     ORDER BY m.timestamp ASC`
+  );
+  return rowsToObjects(result);
+}
+
+export async function toggleBookmark(messageId: string, conversationId: string, note?: string) {
+  const db = await getDb();
+  const safeMsg = messageId.replace(/'/g, "''");
+  const existing = db.exec(`SELECT id FROM bookmarks WHERE message_id = '${safeMsg}'`);
+  if (existing[0]?.values?.length) {
+    db.run(`DELETE FROM bookmarks WHERE message_id = '${safeMsg}'`);
+    scheduleSave();
+    return { bookmarked: false };
+  } else {
+    const id = crypto.randomUUID ? crypto.randomUUID() : `bm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    db.run(
+      `INSERT INTO bookmarks (id, message_id, conversation_id, note) VALUES (?, ?, ?, ?)`,
+      [id, messageId, conversationId, note || null]
+    );
+    scheduleSave();
+    return { bookmarked: true, id };
+  }
+}
+
+export async function getBookmarkedMessageIds(conversationId: string): Promise<Set<string>> {
+  const db = await getDb();
+  const safeId = conversationId.replace(/'/g, "''");
+  const result = db.exec(`SELECT message_id FROM bookmarks WHERE conversation_id = '${safeId}'`);
+  const ids = new Set<string>();
+  if (result[0]?.values) {
+    for (const row of result[0].values) ids.add(row[0] as string);
+  }
+  return ids;
+}
+
+export async function getDashboardData() {
+  const db = await getDb();
+  const stats = await getStats();
+  const bookmarkCount = (db.exec("SELECT COUNT(*) FROM bookmarks")[0]?.values[0]?.[0] as number) || 0;
+
+  const recentConvs = db.exec(
+    `SELECT c.id, c.title, c.platform, c.message_count,
+       GROUP_CONCAT(p.display_name, ', ') as participant_names,
+       c.last_message_at
+     FROM conversations c
+     LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id
+     LEFT JOIN participants p ON cp.participant_id = p.id
+     GROUP BY c.id
+     ORDER BY c.last_message_at DESC
+     LIMIT 5`
+  );
+
+  const recentSources = db.exec(
+    `SELECT s.id, s.filename, s.file_type, s.imported_at,
+       (SELECT COUNT(*) FROM messages m WHERE m.source_id = s.id) as message_count
+     FROM sources s
+     ORDER BY s.imported_at DESC
+     LIMIT 5`
+  );
+
+  return {
+    ...stats,
+    bookmarks: bookmarkCount,
+    recentConversations: rowsToObjects(recentConvs),
+    recentSources: rowsToObjects(recentSources),
+  };
+}
+
+export async function deleteCaseSection(sectionId: string) {
+  const db = await getDb();
+  const safeId = sectionId.replace(/'/g, "''");
+  db.run("BEGIN TRANSACTION");
+  try {
+    db.run(`UPDATE sources SET section_id = NULL WHERE section_id = '${safeId}'`);
+    db.run(`UPDATE conversations SET section_id = NULL WHERE section_id = '${safeId}'`);
+    db.run(`DELETE FROM case_sections WHERE id = '${safeId}'`);
     db.run("COMMIT");
   } catch (e) {
     db.run("ROLLBACK");

@@ -8,6 +8,7 @@ const navItems = [
   { href: "/import", label: "Import", icon: "📥" },
   { href: "/conversations", label: "Conversations", icon: "💬" },
   { href: "/search", label: "Search", icon: "🔍" },
+  { href: "/export", label: "Export", icon: "📤" },
   { href: "/settings", label: "Settings", icon: "⚙️" },
 ];
 
