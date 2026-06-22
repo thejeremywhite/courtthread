@@ -323,11 +323,14 @@ function SearchPageInner() {
     });
   }
 
+  // All-imports-selected is the DEFAULT (not a filter), so don't render a chip per
+  // source in that case — only show source chips when narrowed to a subset.
+  const allSrcSelected = sources.length > 0 && selectedSources.size === sources.length;
   const scopeChips: ScopeChip[] = [
-    ...Array.from(selectedSources).map((id) => {
+    ...(allSrcSelected ? [] : Array.from(selectedSources).map((id) => {
       const src = sources.find((s) => s.id === id);
       return { type: "source" as const, id, label: src ? cleanSourceName(src.filename) : id, detail: `${src?.message_count || 0} msgs` };
-    }),
+    })),
     ...Array.from(selectedPlatforms).map((p) => ({
       type: "platform" as const, id: p, label: p,
     })),
@@ -378,6 +381,12 @@ function SearchPageInner() {
     setSelectedParticipants([]);
     setSelectedPlatforms(new Set());
     setSelectedSources(new Set(sources.map((s) => s.id)));
+    // Context is a filter too — reset it to the default.
+    setContextMode("time");
+    setContextLines(3);
+    setContextCustom(false);
+    setSearchMode("contains");
+    setMatchCase(false);
     hasSearchedRef.current = false;
     try { sessionStorage.removeItem('courtthread_search'); } catch {}
   }
@@ -404,6 +413,13 @@ function SearchPageInner() {
     // every import, so there is nothing to search.
     if (sources.length > 0 && selectedSources.size === 0) {
       setError("No import sources selected. Select at least one import to search.");
+      setResults(null);
+      return;
+    }
+    // A keyword search must be scoped to at least one conversation (or a participant,
+    // which resolves to conversations) so we never scan the entire database by accident.
+    if (trimmed && selectedConversations.size === 0 && selectedParticipants.length === 0) {
+      setError("Select a conversation to search in (use the “All conversations” dropdown to pick one or more).");
       setResults(null);
       return;
     }
