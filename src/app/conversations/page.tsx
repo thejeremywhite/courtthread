@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { DateTimePicker } from "@/components/DateTimePicker";
+import { cleanSourceName } from "@/lib/sourceName";
 
 interface ConversationRow {
   id: string;
@@ -135,7 +136,7 @@ export default function ConversationsPage() {
         <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}
           className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm">
           <option value="">All sources</option>
-          {sources.map(s => <option key={s.id} value={s.id}>{s.filename}</option>)}
+          {sources.map(s => <option key={s.id} value={s.id}>{cleanSourceName(s.filename)}</option>)}
         </select>
         <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as "newest" | "oldest")}
           className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm">

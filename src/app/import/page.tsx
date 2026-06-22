@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { ImportMetadataDialog, ImportMetadata } from "@/components/import/ImportMetadataDialog";
+import { cleanSourceName } from "@/lib/sourceName";
 
 interface PendingImport {
   type: "files" | "path";
@@ -245,10 +246,6 @@ export default function ImportPage() {
     return { label: fileType || "File", cls: "bg-[var(--secondary)] text-[var(--muted-foreground)]" };
   }
 
-  function cleanSourceName(filename: string): string {
-    const base = filename.split(/[/\\]/).pop() || filename;
-    return base.replace(/\.(txt|html?|json|xml)$/i, "");
-  }
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault();

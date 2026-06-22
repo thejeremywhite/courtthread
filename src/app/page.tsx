@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { cleanSourceName } from "@/lib/sourceName";
 
 interface DashboardData {
   conversations: number;
@@ -124,7 +125,7 @@ export default function Dashboard() {
               {data.recentSources.map((src) => (
                 <div key={src.id} className="px-4 py-3">
                   <div className="flex items-center justify-between mb-0.5">
-                    <span className="text-sm font-medium truncate">{src.filename}</span>
+                    <span className="text-sm font-medium truncate" title={src.filename}>{cleanSourceName(src.filename)}</span>
                     <span className="text-[10px] text-[var(--muted-foreground)] shrink-0 ml-2">
                       {src.message_count.toLocaleString()} msgs
                     </span>

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { PatternBuilder } from "@/components/search/PatternBuilder";
 import { DateTimePicker } from "@/components/DateTimePicker";
+import { cleanSourceName } from "@/lib/sourceName";
 
 interface SearchResult {
   id: string;
@@ -325,7 +326,7 @@ function SearchPageInner() {
   const scopeChips: ScopeChip[] = [
     ...Array.from(selectedSources).map((id) => {
       const src = sources.find((s) => s.id === id);
-      return { type: "source" as const, id, label: src?.filename || id, detail: `${src?.message_count || 0} msgs` };
+      return { type: "source" as const, id, label: src ? cleanSourceName(src.filename) : id, detail: `${src?.message_count || 0} msgs` };
     }),
     ...Array.from(selectedPlatforms).map((p) => ({
       type: "platform" as const, id: p, label: p,
@@ -650,14 +651,14 @@ function SearchPageInner() {
     if (allSourcesSelected) return `All imports (${sources.length} sources, ${totalMsgCount.toLocaleString()} msgs)`;
     if (selectedSources.size === 1) {
       const src = sources.find((s) => s.id === Array.from(selectedSources)[0]);
-      return `${src?.filename || "1 import"} (${(src?.message_count || 0).toLocaleString()} msgs)`;
+      return `${src ? cleanSourceName(src.filename) : "1 import"} (${(src?.message_count || 0).toLocaleString()} msgs)`;
     }
     return `${selectedSources.size} of ${sources.length} imports (${selectedMsgCount.toLocaleString()} msgs)`;
   })();
 
-  const sourceNames = selectedSources.size === 0
-    ? sources.map(s => s.filename)
-    : sources.filter(s => selectedSources.has(s.id)).map(s => s.filename);
+  const sourceNames = (selectedSources.size === 0
+    ? sources
+    : sources.filter(s => selectedSources.has(s.id))).map(s => cleanSourceName(s.filename));
 
   return (
     <div>
@@ -785,7 +786,7 @@ function SearchPageInner() {
                         }`}>
                           {selectedSources.has(src.id) && "✓"}
                         </span>
-                        <span className="flex-1 truncate">{src.filename}</span>
+                        <span className="flex-1 truncate" title={src.filename}>{cleanSourceName(src.filename)}</span>
                         <span className="text-[10px] text-[var(--muted-foreground)] shrink-0">
                           {(src.message_count || 0).toLocaleString()} msgs
                         </span>
