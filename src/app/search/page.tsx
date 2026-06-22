@@ -64,6 +64,19 @@ function formatTime(iso: string): string {
   });
 }
 
+// If a "To" date was picked with no time (local midnight), treat it as the END of
+// that day so a single-day range (e.g. From Jun 26 / To Jun 26) includes the whole day.
+function toInclusiveEnd(iso: string): string {
+  if (!iso) return iso;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  if (d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0 && d.getMilliseconds() === 0) {
+    d.setHours(23, 59, 59, 999);
+    return d.toISOString();
+  }
+  return iso;
+}
+
 function highlightMatch(text: string, query: string, caseSensitive: boolean): React.ReactNode {
   if (!query || !text) return text;
   try {
@@ -144,6 +157,7 @@ function SearchPageInner() {
   const restoredRef = useRef(false);
 
   const cameFromConversationRef = useRef(false);
+  const clearedRef = useRef(false);
 
   // Decide initial state on mount: a conversation-scoped search starts fresh;
   // otherwise restore the saved session so navigating away and back is lossless.
@@ -207,7 +221,7 @@ function SearchPageInner() {
       // what would be searched. Skip only when coming from a specific conversation
       // (which selects that conversation's source) — but always backfill an empty
       // selection, even after a restore that didn't carry a source selection.
-      if (!cameFromConversationRef.current) {
+      if (!cameFromConversationRef.current && !clearedRef.current) {
         setSelectedSources((prev) => prev.size > 0 ? prev : new Set(srcs.map((s: SourceRow) => s.id)));
       }
     }).catch(() => {});
@@ -241,6 +255,7 @@ function SearchPageInner() {
   useEffect(() => {
     if (selectedSources.size === 0) {
       setAvailableConversations([]);
+      setSelectedConversations((prev) => (prev.size === 0 ? prev : new Set()));
       return;
     }
     const promises = Array.from(selectedSources).map((srcId) =>
@@ -249,6 +264,14 @@ function SearchPageInner() {
     Promise.all(promises).then((results) => {
       const all = results.flatMap((r) => r.conversations || []);
       setAvailableConversations(all);
+      // Drop any selected conversations that don't belong to the now-selected imports,
+      // so switching imports doesn't leave a stale conversation filter that returns nothing.
+      const validIds = new Set(all.map((c: ConversationRow) => c.id));
+      setSelectedConversations((prev) => {
+        if (prev.size === 0) return prev;
+        const pruned = new Set(Array.from(prev).filter((id) => validIds.has(id)));
+        return pruned.size === prev.size ? prev : pruned;
+      });
     }).catch(() => {});
   }, [selectedSources]);
 
@@ -363,8 +386,9 @@ function SearchPageInner() {
   }
 
   function clearAllScope() {
-    // Reset to the default state: all imports selected, everything else cleared.
-    setSelectedSources(new Set(sources.map((s) => s.id)));
+    // Clear all scope selections — nothing stays selected.
+    clearedRef.current = true;
+    setSelectedSources(new Set());
     setSelectedPlatforms(new Set());
     setSelectedParticipants([]);
     setSelectedConversations(new Set());
@@ -384,19 +408,20 @@ function SearchPageInner() {
     setSelectedConversations(new Set());
     setSelectedParticipants([]);
     setSelectedPlatforms(new Set());
-    setSelectedSources(new Set(sources.map((s) => s.id)));
+    // Clear means CLEAR: deselect every import too. Nothing stays selected.
+    setSelectedSources(new Set());
     setConvSearchText("");
-    // Context is a filter too — reset it to the default.
     setContextMode("time");
     setContextLines(3);
     setContextCustom(false);
     setSearchMode("contains");
     setMatchCase(false);
     hasSearchedRef.current = false;
-    // Drop the ?conversationId= (and any other) param so the conversation scope
-    // doesn't re-apply on a remount, and clear cached state.
+    // Stop the default "select all imports" effect from re-filling the selection,
+    // and drop any ?conversationId= so it can't re-seed on a remount.
     cameFromConversationRef.current = false;
-    restoredRef.current = true; // we are now in an explicit cleared state
+    clearedRef.current = true;
+    restoredRef.current = true;
     try { sessionStorage.removeItem('courtthread_search'); } catch {}
     if (searchParams.toString()) router.replace(pathname, { scroll: false });
   }
@@ -462,7 +487,7 @@ function SearchPageInner() {
         useRegex: true,
         matchCase,
         dateFrom: dateFrom || undefined,
-        dateTo: dateTo || undefined,
+        dateTo: toInclusiveEnd(dateTo) || undefined,
         contextLines,
         contextMode,
         sortOrder,
@@ -649,7 +674,7 @@ function SearchPageInner() {
       }
       const body: any = {
         query: effectiveQuery, useRegex: true, matchCase,
-        dateFrom: dateFrom || undefined, dateTo: dateTo || undefined,
+        dateFrom: dateFrom || undefined, dateTo: toInclusiveEnd(dateTo) || undefined,
         contextLines, contextMode, sortOrder, page: 1, limit: 100000,
       };
       if (selectedSources.size > 0) body.sourceIds = Array.from(selectedSources);
