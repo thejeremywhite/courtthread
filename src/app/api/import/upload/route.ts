@@ -10,6 +10,7 @@ import {
   insertConversation,
   insertParticipant,
   insertMessages,
+  deleteSource,
 } from "@/lib/db/queries";
 import { getDb } from "@/lib/db";
 import { v4 as uuidv4 } from "uuid";
@@ -31,6 +32,8 @@ export async function POST(request: NextRequest) {
     let conversationsImported = 0;
     let messagesImported = 0;
     let filesProcessed = 0;
+    let skippedEmpty = 0;
+    const emptyFiles: string[] = [];
     const errors: Array<{ file: string; error: string }> = [];
 
     const fbJsonGroups = new Map<string, Array<{ name: string; content: string }>>();
@@ -114,11 +117,20 @@ export async function POST(request: NextRequest) {
             continue;
         }
 
+        let messagesForSource = 0;
         for (const conv of conversations) {
           if (conv.messages.length === 0) continue;
           const result = await importConversation(conv, sourceId, ownerName);
           conversationsImported += result.conversations;
           messagesImported += result.messages;
+          messagesForSource += result.messages;
+        }
+
+        // Don't leave behind an empty source row when a file yields no messages.
+        if (messagesForSource === 0) {
+          await deleteSource(sourceId);
+          skippedEmpty++;
+          emptyFiles.push(file.name);
         }
 
         filesProcessed++;
@@ -149,6 +161,10 @@ export async function POST(request: NextRequest) {
           const result = await importConversation(combined, sourceId, ownerName);
           conversationsImported += result.conversations;
           messagesImported += result.messages;
+        } else {
+          await deleteSource(sourceId);
+          skippedEmpty++;
+          emptyFiles.push(displayDir || dir);
         }
 
         filesProcessed += groupFiles.length;
@@ -159,7 +175,8 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      stats: { filesProcessed, conversationsImported, messagesImported },
+      stats: { filesProcessed, conversationsImported, messagesImported, skippedEmpty },
+      emptyFiles,
       errors,
     });
   } catch (e: any) {

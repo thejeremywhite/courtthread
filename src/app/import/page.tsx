@@ -42,7 +42,9 @@ interface ImportResult {
     filesProcessed: number;
     conversationsImported: number;
     messagesImported: number;
+    skippedEmpty?: number;
   };
+  emptyFiles?: string[];
   errors: Array<{ file: string; error: string }>;
 }
 
@@ -410,6 +412,18 @@ export default function ImportPage() {
             </p>
             <a href="/conversations" className="text-sm text-[var(--primary)] hover:underline">View &rarr;</a>
           </div>
+          {!!importResult.stats.skippedEmpty && importResult.stats.skippedEmpty > 0 && (
+            <details className="mt-1">
+              <summary className="text-xs text-amber-500 cursor-pointer">
+                {importResult.stats.skippedEmpty} file{importResult.stats.skippedEmpty !== 1 ? "s" : ""} had no messages and {importResult.stats.skippedEmpty !== 1 ? "were" : "was"} skipped (not imported)
+              </summary>
+              {importResult.emptyFiles && importResult.emptyFiles.length > 0 && (
+                <ul className="text-xs mt-1 space-y-0.5 max-h-32 overflow-y-auto">
+                  {importResult.emptyFiles.map((f, i) => <li key={i} className="text-[var(--muted-foreground)]">{f}</li>)}
+                </ul>
+              )}
+            </details>
+          )}
           {importResult.errors.length > 0 && (
             <details className="mt-1">
               <summary className="text-xs text-[var(--destructive)] cursor-pointer">{importResult.errors.length} errors</summary>
