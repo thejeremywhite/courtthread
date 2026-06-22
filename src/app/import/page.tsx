@@ -576,6 +576,10 @@ export default function ImportPage() {
       {pendingImport && (
         <ImportMetadataDialog
           filename={pendingImport.label}
+          fileModified={(() => {
+            const f = pendingImport.files ? Array.from(pendingImport.files)[0] : undefined;
+            return f && typeof f.lastModified === "number" ? f.lastModified : undefined;
+          })()}
           onConfirm={executeImport}
           onCancel={() => setPendingImport(null)}
         />

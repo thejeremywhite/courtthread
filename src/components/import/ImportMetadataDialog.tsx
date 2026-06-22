@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { DateTimePicker } from "@/components/DateTimePicker";
 
 export interface ImportMetadata {
   platforms: string[];
@@ -14,6 +15,7 @@ export interface ImportMetadata {
 
 interface ImportMetadataDialogProps {
   filename: string;
+  fileModified?: number; // ms timestamp from the file/directory metadata, if known
   onConfirm: (metadata: ImportMetadata) => void;
   onCancel: () => void;
 }
@@ -32,7 +34,7 @@ const EXPORT_METHODS = [
   "Court order / legal production",
 ];
 
-export function ImportMetadataDialog({ filename, onConfirm, onCancel }: ImportMetadataDialogProps) {
+export function ImportMetadataDialog({ filename, fileModified, onConfirm, onCancel }: ImportMetadataDialogProps) {
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
   const [customPlatform, setCustomPlatform] = useState("");
   const [sourceDescription, setSourceDescription] = useState("");
@@ -146,10 +148,26 @@ export function ImportMetadataDialog({ filename, onConfirm, onCancel }: ImportMe
           {/* Date obtained */}
           <div>
             <label className="text-xs font-medium text-[var(--muted-foreground)] uppercase tracking-wider mb-1.5 block">
-              Date obtained / exported
+              Date &amp; time obtained / exported
             </label>
-            <input type="date" value={dateObtained} onChange={(e) => setDateObtained(e.target.value)}
-              className="w-full px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--card)] text-sm" />
+            <div className="flex items-start gap-2 flex-wrap">
+              <div className="w-56">
+                <DateTimePicker value={dateObtained} onChange={setDateObtained} placeholder="Pick date & time..." />
+              </div>
+              {fileModified ? (
+                <button
+                  type="button"
+                  onClick={() => setDateObtained(new Date(fileModified).toISOString())}
+                  className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-xs hover:bg-[var(--secondary)] transition"
+                  title="Use the file's last-modified timestamp from its metadata"
+                >
+                  Use file date
+                  <span className="block text-[10px] text-[var(--muted-foreground)]">
+                    {new Date(fileModified).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" })}
+                  </span>
+                </button>
+              ) : null}
+            </div>
           </div>
 
           {/* Modified? */}
