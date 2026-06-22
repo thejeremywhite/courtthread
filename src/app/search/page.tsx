@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { PatternBuilder } from "@/components/search/PatternBuilder";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { cleanSourceName } from "@/lib/sourceName";
@@ -93,6 +93,8 @@ type ContextMode = "time" | "messages";
 
 function SearchPageInner() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("contains");
   const [matchCase, setMatchCase] = useState(false);
@@ -381,6 +383,7 @@ function SearchPageInner() {
     setSelectedParticipants([]);
     setSelectedPlatforms(new Set());
     setSelectedSources(new Set(sources.map((s) => s.id)));
+    setConvSearchText("");
     // Context is a filter too — reset it to the default.
     setContextMode("time");
     setContextLines(3);
@@ -388,7 +391,12 @@ function SearchPageInner() {
     setSearchMode("contains");
     setMatchCase(false);
     hasSearchedRef.current = false;
+    // Drop the ?conversationId= (and any other) param so the conversation scope
+    // doesn't re-apply on a remount, and clear cached state.
+    cameFromConversationRef.current = false;
+    restoredRef.current = true; // we are now in an explicit cleared state
     try { sessionStorage.removeItem('courtthread_search'); } catch {}
+    if (searchParams.toString()) router.replace(pathname, { scroll: false });
   }
 
   const filteredConversations = availableConversations.filter((c) => {
