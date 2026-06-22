@@ -203,9 +203,11 @@ function SearchPageInner() {
     fetch("/api/sources").then((r) => r.json()).then((d) => {
       const srcs = d.sources || [];
       setSources(srcs);
-      // Default to ALL imports selected (boxes checked) so the UI reflects what is
-      // actually being searched. Only when we didn't restore or come from a conversation.
-      if (!restoredRef.current) {
+      // Default to ALL imports selected (boxes checked) so the UI honestly reflects
+      // what would be searched. Skip only when coming from a specific conversation
+      // (which selects that conversation's source) — but always backfill an empty
+      // selection, even after a restore that didn't carry a source selection.
+      if (!cameFromConversationRef.current) {
         setSelectedSources((prev) => prev.size > 0 ? prev : new Set(srcs.map((s: SourceRow) => s.id)));
       }
     }).catch(() => {});
@@ -417,17 +419,23 @@ function SearchPageInner() {
       setResults(null);
       return;
     }
-    // Sources default to all-selected; an empty selection means the user deselected
-    // every import, so there is nothing to search.
+    // An empty source selection means the user deselected every import — nothing to search.
     if (sources.length > 0 && selectedSources.size === 0) {
-      setError("No import sources selected. Select at least one import to search.");
+      setError("No imports selected. Choose at least one import (or conversation) to search.");
       setResults(null);
       return;
     }
-    // A keyword search must be scoped to at least one conversation (or a participant,
-    // which resolves to conversations) so we never scan the entire database by accident.
-    if (trimmed && selectedConversations.size === 0 && selectedParticipants.length === 0) {
-      setError("Select a conversation to search in (use the “All conversations” dropdown to pick one or more).");
+    // Only block a keyword search that targets the ENTIRE corpus (all imports, nothing
+    // else narrowed). Selecting a specific import, conversation, participant, or sender
+    // is enough scope on its own.
+    const narrowed =
+      (sources.length > 0 && selectedSources.size < sources.length) ||
+      selectedConversations.size > 0 ||
+      selectedParticipants.length > 0 ||
+      selectedSenders.size > 0 ||
+      !!dateFrom || !!dateTo;
+    if (trimmed && !narrowed) {
+      setError("Narrow your search first — pick specific import(s), a conversation, or a person. Searching every import at once isn't supported.");
       setResults(null);
       return;
     }
@@ -664,9 +672,8 @@ function SearchPageInner() {
   }
 
   const totalMsgCount = sources.reduce((sum, s) => sum + (s.message_count || 0), 0);
-  const selectedMsgCount = selectedSources.size === 0
-    ? totalMsgCount
-    : sources.filter((s) => selectedSources.has(s.id)).reduce((sum, s) => sum + (s.message_count || 0), 0);
+  // Honest count: only what is actually selected (no "empty = all" fallback).
+  const selectedMsgCount = sources.filter((s) => selectedSources.has(s.id)).reduce((sum, s) => sum + (s.message_count || 0), 0);
 
   const allSourcesSelected = sources.length > 0 && selectedSources.size === sources.length;
   const sourceLabel = (() => {
@@ -680,9 +687,7 @@ function SearchPageInner() {
     return `${selectedSources.size} of ${sources.length} imports (${selectedMsgCount.toLocaleString()} msgs)`;
   })();
 
-  const sourceNames = (selectedSources.size === 0
-    ? sources
-    : sources.filter(s => selectedSources.has(s.id))).map(s => cleanSourceName(s.filename));
+  const sourceNames = sources.filter(s => selectedSources.has(s.id)).map(s => cleanSourceName(s.filename));
 
   return (
     <div>
@@ -1208,10 +1213,13 @@ function SearchPageInner() {
       {results === null && !error && (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-8 text-center text-[var(--muted-foreground)]">
           <p className="mb-3">Enter a search term to find messages.</p>
-          {sources.length > 0 && (
+          {sources.length > 0 && selectedSources.size === 0 && (
+            <p className="text-xs font-medium text-amber-500">No imports selected — pick at least one import (or a conversation) to search.</p>
+          )}
+          {sources.length > 0 && selectedSources.size > 0 && (
             <div className="text-xs space-y-1">
               <p className="font-medium text-[var(--foreground)]">
-                Searching {selectedSources.size === 0 ? "all" : `${selectedSources.size} of ${sources.length}`} imports ({(selectedSources.size === 0 ? totalMsgCount : selectedMsgCount).toLocaleString()} messages):
+                Searching {allSourcesSelected ? `all ${sources.length}` : `${selectedSources.size} of ${sources.length}`} imports ({selectedMsgCount.toLocaleString()} messages):
               </p>
               {sourceNames.map((name, i) => (
                 <p key={i}>{name}</p>
