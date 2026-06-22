@@ -217,13 +217,9 @@ function SearchPageInner() {
     fetch("/api/sources").then((r) => r.json()).then((d) => {
       const srcs = d.sources || [];
       setSources(srcs);
-      // Default to ALL imports selected (boxes checked) so the UI honestly reflects
-      // what would be searched. Skip only when coming from a specific conversation
-      // (which selects that conversation's source) — but always backfill an empty
-      // selection, even after a restore that didn't carry a source selection.
-      if (!cameFromConversationRef.current && !clearedRef.current) {
-        setSelectedSources((prev) => prev.size > 0 ? prev : new Set(srcs.map((s: SourceRow) => s.id)));
-      }
+      // Do NOT auto-select imports. Selection is explicit: the page loads with
+      // nothing selected (or whatever the restored session / conversation scope set),
+      // and the user picks what to search. A refresh must not re-select everything.
     }).catch(() => {});
     fetch("/api/conversations?limit=0").then((r) => r.json()).then((d) => {
       if (d.platforms) setAllPlatforms(d.platforms);
