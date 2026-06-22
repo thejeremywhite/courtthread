@@ -240,11 +240,15 @@ export async function insertMessages(messages: Array<{
 
 export async function getSources() {
   const db = await getDb();
+  // Pre-aggregate message/conversation counts in one pass each, then join — far
+  // faster than correlated subqueries when there are many sources.
   const result = db.exec(
     `SELECT s.*,
-       (SELECT COUNT(*) FROM conversations c WHERE c.source_id = s.id) as conversation_count,
-       (SELECT COUNT(*) FROM messages m WHERE m.source_id = s.id) as message_count
+       COALESCE(cc.cnt, 0) as conversation_count,
+       COALESCE(mc.cnt, 0) as message_count
      FROM sources s
+     LEFT JOIN (SELECT source_id, COUNT(*) cnt FROM conversations GROUP BY source_id) cc ON cc.source_id = s.id
+     LEFT JOIN (SELECT source_id, COUNT(*) cnt FROM messages GROUP BY source_id) mc ON mc.source_id = s.id
      ORDER BY s.imported_at DESC`
   );
   return rowsToObjects(result);

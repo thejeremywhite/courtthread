@@ -35,6 +35,7 @@ export default function ConversationPage() {
   const router = useRouter();
   const pathname = usePathname();
   const highlightMessageId = searchParams.get("messageId") || "";
+  const highlightTerm = searchParams.get("q") || "";
 
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -62,12 +63,13 @@ export default function ConversationPage() {
   useEffect(() => {
     const params = new URLSearchParams();
     if (highlightMessageId) params.set("messageId", highlightMessageId);
+    if (highlightTerm) params.set("q", highlightTerm);
     if (filterSender) params.set("sender", filterSender);
     if (filterDateFrom) params.set("dateFrom", filterDateFrom);
     if (filterDateTo) params.set("dateTo", filterDateTo);
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [filterSender, filterDateFrom, filterDateTo, highlightMessageId, pathname]);
+  }, [filterSender, filterDateFrom, filterDateTo, highlightMessageId, highlightTerm, pathname]);
 
   useEffect(() => {
     fetch(`/api/conversations/${id}`)
@@ -87,12 +89,13 @@ export default function ConversationPage() {
       .catch(() => {});
   }, [id]);
 
-  const loadMessages = useCallback(async (cursor?: string, direction?: "forward" | "backward") => {
+  const loadMessages = useCallback(async (cursor?: string, direction?: "forward" | "backward", anchorId?: string) => {
     const dir = direction || sortDirection;
     if (cursor) setLoadingMore(true); else setLoading(true);
     try {
       const params = new URLSearchParams({ limit: "200", direction: dir });
       if (cursor) params.set("cursor", cursor);
+      else if (anchorId) params.set("anchor", anchorId);
       if (filterSender) params.set("sender", filterSender);
       if (filterDateFrom) params.set("dateFrom", filterDateFrom);
       if (filterDateTo) params.set("dateTo", filterDateTo);
@@ -112,8 +115,11 @@ export default function ConversationPage() {
   useEffect(() => {
     setMessages([]);
     setNextCursor(null);
-    loadMessages(undefined, sortDirection);
-  }, [sortDirection, filterSender, filterDateFrom, filterDateTo]);
+    setScrolledToHighlight(false);
+    // If we arrived targeting a specific message and no filter is active, jump to it.
+    const useAnchor = highlightMessageId && !filterSender && !filterDateFrom && !filterDateTo;
+    loadMessages(undefined, sortDirection, useAnchor ? highlightMessageId : undefined);
+  }, [sortDirection, filterSender, filterDateFrom, filterDateTo, highlightMessageId]);
 
   useEffect(() => {
     if (!scrolledToHighlight && highlightMessageId && messages.length > 0) {
@@ -254,6 +260,7 @@ export default function ConversationPage() {
         sourceId={conversation?.source_id || ""}
         bookmarkedIds={bookmarkedIds}
         onToggleBookmark={handleToggleBookmark}
+        highlightText={highlightTerm}
         highlightMessageId={highlightMessageId}
         highlightRef={highlightRef}
       />

@@ -15,8 +15,50 @@ export async function GET(
     const sender = request.nextUrl.searchParams.get("sender") || "";
     const dateFrom = request.nextUrl.searchParams.get("dateFrom") || "";
     const dateTo = request.nextUrl.searchParams.get("dateTo") || "";
+    const anchor = request.nextUrl.searchParams.get("anchor") || "";
 
     const safeId = id.replace(/'/g, "''");
+
+    // Anchored load: jump to a specific message anywhere in the thread and return a
+    // window of messages around it (filters ignored — this is a direct jump).
+    if (anchor) {
+      const safeAnchor = anchor.replace(/'/g, "''");
+      const aRes = db.exec(`SELECT timestamp FROM messages WHERE id = '${safeAnchor}' AND conversation_id = '${safeId}'`);
+      const aTs = aRes[0]?.values[0]?.[0] as string | undefined;
+      if (aTs) {
+        const win = Math.min(Math.max(limit, 50), 300);
+        const toObjs = (res: any): any[] => {
+          if (!res || !res[0]) return [];
+          const { columns, values } = res[0];
+          return values.map((row: any[]) => {
+            const o: any = {}; columns.forEach((c: string, i: number) => { o[c] = row[i]; }); return o;
+          });
+        };
+        const beforeRes = db.exec(`
+          SELECT m.*, p.display_name as sender_name FROM messages m
+          LEFT JOIN participants p ON m.sender_id = p.id
+          WHERE m.conversation_id = '${safeId}' AND m.timestamp <= '${aTs}'
+          ORDER BY m.timestamp DESC LIMIT ${win}`);
+        const afterRes = db.exec(`
+          SELECT m.*, p.display_name as sender_name FROM messages m
+          LEFT JOIN participants p ON m.sender_id = p.id
+          WHERE m.conversation_id = '${safeId}' AND m.timestamp > '${aTs}'
+          ORDER BY m.timestamp ASC LIMIT ${win}`);
+        const before = toObjs(beforeRes).reverse();
+        const after = toObjs(afterRes);
+        const rows = [...before, ...after];
+        const totalRes = db.exec(`SELECT COUNT(*) FROM messages WHERE conversation_id = '${safeId}'`);
+        const total = (totalRes[0]?.values[0]?.[0] as number) || 0;
+        const hasMore = after.length >= win;
+        return NextResponse.json({
+          messages: rows,
+          total,
+          hasMore,
+          nextCursor: hasMore && rows.length > 0 ? rows[rows.length - 1].timestamp : null,
+        });
+      }
+    }
+
     let where = `WHERE m.conversation_id = '${safeId}'`;
 
     if (sender) {

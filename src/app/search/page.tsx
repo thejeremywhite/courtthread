@@ -517,6 +517,127 @@ function SearchPageInner() {
     });
   }
 
+  async function toggleResultBookmark(result: SearchResult) {
+    try {
+      const res = await fetch("/api/bookmarks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId: result.id, conversationId: result.conversation_id }),
+      });
+      const data = await res.json();
+      setBookmarkedIds((prev) => {
+        const next = new Set(prev);
+        if (data.bookmarked) next.add(result.id); else next.delete(result.id);
+        return next;
+      });
+    } catch { /* ignore */ }
+  }
+
+  // Open the full conversation scrolled to this message, with the message and the
+  // search term highlighted (same highlight as the result card).
+  function showInConversation(result: SearchResult) {
+    const params = new URLSearchParams({ messageId: result.id });
+    if (query.trim()) params.set("q", query.trim());
+    window.open(`/conversations/${result.conversation_id}?${params}`, "_blank");
+  }
+
+  // Export search results (all loaded, or a single one) with their context, and
+  // with the matched term highlighted to match the on-screen result.
+  async function exportResults(single?: SearchResult) {
+    setExporting(true);
+    try {
+      let toExport: SearchResult[];
+      if (single) {
+        toExport = [single];
+      } else if (results && results.length >= total) {
+        toExport = results;
+      } else {
+        // Not all results are loaded — fetch the full set (with context) first.
+        const full = await fetchAllResultsForExport();
+        toExport = full || results || [];
+      }
+      const payload = toExport.map((r) => ({
+        id: r.id,
+        content: r.content,
+        sender_name: r.sender_name,
+        timestamp: r.timestamp,
+        conversation_title: r.conversation_title,
+        platform: r.platform,
+        context: r.context,
+      }));
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "searchResults",
+          format: "html",
+          query: query.trim(),
+          matchCase,
+          includeTimestamps: true,
+          includeProvenance: true,
+          includeContext: true,
+          results: payload,
+        }),
+      });
+      if (!res.ok) {
+        const e = await res.json();
+        setError(e.error || "Export failed");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `CourtThread_Search_${single ? "result" : "results"}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function fetchAllResultsForExport(): Promise<SearchResult[] | null> {
+    try {
+      const trimmed = query.trim();
+      let effectiveQuery = trimmed;
+      const isRegex = searchMode === "regex";
+      if (trimmed && !isRegex) {
+        const escaped = effectiveQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        switch (searchMode) {
+          case "starts_with": effectiveQuery = `\\b${escaped}`; break;
+          case "ends_with": effectiveQuery = `${escaped}\\b`; break;
+          case "whole_word": effectiveQuery = `\\b${escaped}\\b`; break;
+          default: effectiveQuery = escaped; break;
+        }
+      }
+      const body: any = {
+        query: effectiveQuery, useRegex: true, matchCase,
+        dateFrom: dateFrom || undefined, dateTo: dateTo || undefined,
+        contextLines, contextMode, sortOrder, page: 1, limit: 100000,
+      };
+      if (selectedSources.size > 0) body.sourceIds = Array.from(selectedSources);
+      if (selectedPlatforms.size > 0) body.platforms = Array.from(selectedPlatforms);
+      if (selectedSenders.size > 0) body.senderNames = Array.from(selectedSenders);
+      const convIds = new Set<string>();
+      for (const p of selectedParticipants) for (const c of p.conversations) convIds.add(c.id);
+      for (const cid of selectedConversations) convIds.add(cid);
+      if (convIds.size > 0) body.conversationIds = Array.from(convIds);
+      const res = await fetch("/api/search", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      return data.results;
+    } catch {
+      return null;
+    }
+  }
+
   const totalMsgCount = sources.reduce((sum, s) => sum + (s.message_count || 0), 0);
   const selectedMsgCount = selectedSources.size === 0
     ? totalMsgCount
@@ -959,19 +1080,28 @@ function SearchPageInner() {
         <div>
           <div className="flex items-center justify-between mb-4">
             <p className="text-[var(--muted-foreground)]">
-              {total} result{total !== 1 ? "s" : ""} for{" "}
+              {total} result{total !== 1 ? "s" : ""}{query.trim() && (<> for{" "}
               <span className="text-[var(--foreground)] font-medium">
                 {searchMode === "regex" ? `/${query}/` : `"${query}"`}
-              </span>
+              </span></>)}
               {scopeChips.length > 0 && (
                 <span className="text-xs ml-2">
                   (filtered by {scopeChips.length} scope{scopeChips.length !== 1 ? "s" : ""})
                 </span>
               )}
             </p>
-            <span className="text-xs text-[var(--muted-foreground)]">
-              {sortOrder === "desc" ? "Newest first" : "Oldest first"}
-            </span>
+            <div className="flex items-center gap-3">
+              {results.length > 0 && (
+                <button onClick={() => exportResults()} disabled={exporting}
+                  className="px-3 py-1.5 rounded-lg bg-[var(--primary)] text-white text-xs font-medium hover:opacity-90 transition disabled:opacity-50"
+                  title="Export all results with context as an HTML exhibit">
+                  {exporting ? "Exporting…" : `Export ${total} result${total !== 1 ? "s" : ""}`}
+                </button>
+              )}
+              <span className="text-xs text-[var(--muted-foreground)]">
+                {sortOrder === "desc" ? "Newest first" : "Oldest first"}
+              </span>
+            </div>
           </div>
 
           <div className="space-y-3">
@@ -990,13 +1120,28 @@ function SearchPageInner() {
                       </a>
                       <span className="text-[var(--muted-foreground)]">{formatTime(result.timestamp)}</span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-3">
                       {contextLines > 0 && (
                         <button type="button" onClick={() => toggleExpand(result.id)}
                           className="text-xs text-[var(--primary)] hover:underline">
                           {isExpanded ? "Hide context" : result.context.length > 1 ? `Show context (${result.context.length} msgs)` : "Show context"}
                         </button>
                       )}
+                      <button type="button" onClick={() => showInConversation(result)}
+                        className="text-xs text-[var(--primary)] hover:underline" title="Open the full conversation at this message in a new tab">
+                        Show in conversation
+                      </button>
+                      <button type="button" onClick={() => toggleResultBookmark(result)}
+                        className={`text-xs flex items-center gap-1 hover:underline ${bookmarkedIds.has(result.id) ? "text-amber-400" : "text-[var(--muted-foreground)] hover:text-amber-400"}`}
+                        title={bookmarkedIds.has(result.id) ? "Remove bookmark" : "Bookmark this message"}>
+                        <span className="text-base leading-none">{bookmarkedIds.has(result.id) ? "★" : "☆"}</span>
+                        {bookmarkedIds.has(result.id) ? "Bookmarked" : "Bookmark"}
+                      </button>
+                      <button type="button" onClick={() => exportResults(result)} disabled={exporting}
+                        className="text-xs text-[var(--primary)] hover:underline disabled:opacity-50"
+                        title="Export this result with its context">
+                        Export
+                      </button>
                     </div>
                   </div>
 

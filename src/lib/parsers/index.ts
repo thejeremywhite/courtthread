@@ -3,10 +3,11 @@ import { parseFacebookJson, parseFacebookJsonDirectory } from "./facebook-json";
 import { parseFacebookHtml, parseFacebookHtmlDirectory } from "./facebook-html";
 import { parseSmsXml, parseCallsXml } from "./sms-xml";
 import { parseFacebookTxt } from "./facebook-txt";
+import { parseSmsThreadTxt, isSmsThreadTxt } from "./sms-thread-txt";
 import fs from "fs";
 import path from "path";
 
-export type FileType = "facebook-json" | "facebook-html" | "facebook-txt" | "sms-xml" | "calls-xml" | "unknown";
+export type FileType = "facebook-json" | "facebook-html" | "facebook-txt" | "sms-thread-txt" | "sms-xml" | "calls-xml" | "unknown";
 
 export function detectFileType(filePath: string, content?: string): FileType {
   const ext = path.extname(filePath).toLowerCase();
@@ -33,6 +34,7 @@ export function detectFileType(filePath: string, content?: string): FileType {
   }
 
   if (ext === ".txt") {
+    if (content && isSmsThreadTxt(content)) return "sms-thread-txt";
     return "facebook-txt";
   }
 
@@ -82,6 +84,11 @@ export async function parseFile(
       }
       case "facebook-txt": {
         const conv = parseFacebookTxt(content, filePath, ownerName);
+        conversations.push(conv);
+        break;
+      }
+      case "sms-thread-txt": {
+        const conv = parseSmsThreadTxt(content, filePath, ownerName, path.basename(filePath));
         conversations.push(conv);
         break;
       }
@@ -247,6 +254,11 @@ async function parseZipFile(
           }
           case "facebook-txt": {
             const conv = parseFacebookTxt(content, `${zipPath}!${entry.entryName}`, ownerName);
+            result.conversations.push(conv);
+            break;
+          }
+          case "sms-thread-txt": {
+            const conv = parseSmsThreadTxt(content, `${zipPath}!${entry.entryName}`, ownerName, path.basename(entry.entryName));
             result.conversations.push(conv);
             break;
           }

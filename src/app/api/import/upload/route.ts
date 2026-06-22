@@ -3,6 +3,7 @@ import { parseFacebookJson, parseFacebookJsonDirectory } from "@/lib/parsers/fac
 import { parseFacebookHtml } from "@/lib/parsers/facebook-html";
 import { parseSmsXml, parseCallsXml } from "@/lib/parsers/sms-xml";
 import { parseFacebookTxt } from "@/lib/parsers/facebook-txt";
+import { parseSmsThreadTxt } from "@/lib/parsers/sms-thread-txt";
 import { detectFileType } from "@/lib/parsers";
 import {
   insertSource,
@@ -104,6 +105,9 @@ export async function POST(request: NextRequest) {
             break;
           case "facebook-txt":
             conversations = [parseFacebookTxt(content, file.name, ownerName)];
+            break;
+          case "sms-thread-txt":
+            conversations = [parseSmsThreadTxt(content, file.name, ownerName, file.name)];
             break;
           default:
             errors.push({ file: file.name, error: `Unsupported file type: ${fileType}` });

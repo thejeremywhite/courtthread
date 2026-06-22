@@ -41,6 +41,19 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Escape HTML, then wrap matches of `term` in <mark> — same highlight as the search UI.
+function escapeAndHighlight(text: string, term: string, matchCase: boolean): string {
+  const escaped = escapeHtml(text);
+  if (!term) return escaped;
+  try {
+    const safeTerm = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(${safeTerm})`, matchCase ? "g" : "gi");
+    return escaped.replace(re, '<mark>$1</mark>');
+  } catch {
+    return escaped;
+  }
+}
+
 // Extract human-readable media references from a message's metadata JSON.
 function getMediaRefs(metadata: string | null): Array<{ type: string; filename: string }> {
   if (!metadata) return [];
@@ -67,6 +80,68 @@ export async function POST(request: NextRequest) {
     const { type, format, includeProvenance, includeTimestamps, includeBatesNumbers, batesPrefix, batesStart } = body;
     const includeMedia = body.includeMedia !== false; // default on
     const embedMedia = body.embedMedia === true && format === "html"; // bundle real files into a ZIP
+
+    // Export search results (with their context) exactly as shown on the search page,
+    // matched term highlighted. Used by the search page Export buttons.
+    if (type === "searchResults") {
+      const results: any[] = body.results || [];
+      const term: string = body.query || "";
+      const mc: boolean = body.matchCase === true;
+      const includeContext: boolean = body.includeContext !== false;
+      const ts = (iso: string) => formatTimestamp(iso);
+
+      let html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>CourtThread Search Export</title>
+<style>
+  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 820px; margin: 0 auto; padding: 20px; color: #1a1a1a; }
+  .header { border-bottom: 2px solid #333; padding-bottom: 12px; margin-bottom: 20px; }
+  .header h1 { font-size: 18px; margin: 0; }
+  .header p { font-size: 11px; color: #666; margin: 4px 0 0; }
+  .result { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 14px; overflow: hidden; page-break-inside: avoid; }
+  .result-head { background: #f0f0f0; padding: 6px 10px; font-size: 11px; color: #555; display: flex; gap: 8px; }
+  .ctx { padding: 2px 10px; font-size: 13px; line-height: 1.5; color: #555; }
+  .ctx .who { font-weight: 600; color: #333; }
+  .ctx .t { color: #999; font-size: 11px; margin-left: 6px; }
+  .ctx.match { background: #fff8e1; border-left: 3px solid #f5a623; }
+  mark { background: #ffe58a; padding: 0 2px; border-radius: 2px; }
+  .provenance { border-top: 2px solid #333; margin-top: 24px; padding-top: 12px; font-size: 10px; color: #666; }
+</style></head><body>
+<div class="header">
+  <h1>Court Evidence — Search Results Export</h1>
+  <p>Generated: ${new Date().toLocaleString()}</p>
+  ${term ? `<p>Search term: ${escapeHtml(term)}</p>` : ""}
+  <p>Results: ${results.length}</p>
+</div>
+`;
+      for (const r of results) {
+        html += `<div class="result">`;
+        html += `<div class="result-head"><span>${escapeHtml(r.platform || "")}</span><span>${escapeHtml(r.conversation_title || "Untitled")}</span><span>${ts(r.timestamp)}</span></div>`;
+        const ctxList = includeContext && Array.isArray(r.context) && r.context.length > 1
+          ? r.context
+          : [{ id: r.id, content: r.content, sender_name: r.sender_name, timestamp: r.timestamp }];
+        for (const c of ctxList) {
+          const isMatch = c.id === r.id;
+          const body = isMatch
+            ? escapeAndHighlight(c.content || "[media]", term, mc)
+            : escapeHtml(c.content || "[media]");
+          html += `<div class="ctx${isMatch ? " match" : ""}"><span class="who">${escapeHtml(c.sender_name || "Unknown")}</span><span class="t">${ts(c.timestamp)}</span><div>${body}</div></div>`;
+        }
+        html += `</div>\n`;
+      }
+      html += `
+<div class="provenance">
+  <p>Extracted using CourtThread&trade; ${new Date().getFullYear()}</p>
+  <p>Export date: ${new Date().toISOString()}</p>
+  <p>This document was generated from electronic records imported into CourtThread for the purpose of litigation.</p>
+</div></body></html>`;
+
+      return new Response(html, {
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Content-Disposition": `attachment; filename="CourtThread_Search_Export.html"`,
+        },
+      });
+    }
 
     const db = await getDb();
     let messages: any[] = [];

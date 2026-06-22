@@ -84,6 +84,10 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_source ON messages(source_id);
+CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_source ON conversations(source_id);
+CREATE INDEX IF NOT EXISTS idx_convparts_participant ON conversation_participants(participant_id);
 
 CREATE TABLE IF NOT EXISTS media (
   id TEXT PRIMARY KEY,
