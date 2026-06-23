@@ -90,27 +90,10 @@ function ExportPageInner() {
   async function handleExport() {
     setExporting(true);
     try {
-      const body: any = {
+      const body = buildScopeBody({
         format: exportFormat,
-        includeProvenance,
-        includeTimestamps,
-        includeMedia,
         embedMedia: embedMedia && exportFormat === "html",
-        includeBatesNumbers,
-        batesPrefix,
-        batesStart,
-      };
-
-      if (tab === "bookmarks") {
-        body.bookmarkIds = selectedBookmarks.size > 0 ? Array.from(selectedBookmarks) : bookmarks.map((b) => b.id);
-        body.type = "bookmarks";
-      } else {
-        body.conversationIds = Array.from(selectedConvs);
-        body.type = "conversations";
-        if (filterSender) body.sender = filterSender;
-        if (filterDateFrom) body.dateFrom = filterDateFrom;
-        if (filterDateTo) body.dateTo = filterDateTo;
-      }
+      });
 
       const res = await fetch("/api/export", {
         method: "POST",
@@ -136,6 +119,64 @@ function ExportPageInner() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    } catch (e: any) {
+      alert(e.message);
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  function buildScopeBody(extra: Record<string, unknown>) {
+    const body: any = {
+      includeProvenance,
+      includeTimestamps,
+      includeMedia,
+      includeBatesNumbers,
+      batesPrefix,
+      batesStart,
+      ...extra,
+    };
+    if (tab === "bookmarks") {
+      body.bookmarkIds = selectedBookmarks.size > 0 ? Array.from(selectedBookmarks) : bookmarks.map((b) => b.id);
+      body.type = "bookmarks";
+    } else {
+      body.conversationIds = Array.from(selectedConvs);
+      body.type = "conversations";
+      if (filterSender) body.sender = filterSender;
+      if (filterDateFrom) body.dateFrom = filterDateFrom;
+      if (filterDateTo) body.dateTo = filterDateTo;
+    }
+    return body;
+  }
+
+  // Open a print-formatted view in a new window and trigger the browser print
+  // dialog (which can "Save as PDF"). Images render inline via the live media route.
+  async function handlePrint() {
+    setExporting(true);
+    try {
+      const body = buildScopeBody({ format: "html", inlineMedia: true, embedMedia: false });
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        alert(errData.error || "Print export failed");
+        return;
+      }
+      let html = await res.text();
+      // Base tag so "/api/media" URLs resolve in the new window; auto-open print after load.
+      const inject = `<base href="${location.origin}/"><script>window.addEventListener('load',function(){setTimeout(function(){window.print();},400);});<\/script>`;
+      html = html.replace(/<head>/i, `<head>${inject}`);
+      const w = window.open("", "_blank");
+      if (!w) {
+        alert("Pop-up blocked — allow pop-ups for this site to print / save as PDF.");
+        return;
+      }
+      w.document.open();
+      w.document.write(html);
+      w.document.close();
     } catch (e: any) {
       alert(e.message);
     } finally {
@@ -375,8 +416,18 @@ function ExportPageInner() {
             {exporting ? "Exporting..." : `Export ${tab === "bookmarks" ? "Bookmarks" : `${selectedConvs.size} Conversation${selectedConvs.size !== 1 ? "s" : ""}`}`}
           </button>
 
+          <button
+            onClick={handlePrint}
+            disabled={exporting || (tab === "conversations" && selectedConvs.size === 0)}
+            className="w-full px-6 py-2.5 rounded-lg border border-[var(--border)] font-medium hover:bg-[var(--secondary)] transition disabled:opacity-50"
+            title="Open a print-formatted view; use your browser's print dialog to print or Save as PDF"
+          >
+            🖨️ Print / Save as PDF
+          </button>
+
           <p className="text-[10px] text-[var(--muted-foreground)] text-center">
-            Exported files include &quot;Extracted using CourtThread&trade;&quot; provenance footer
+            Exported files include &quot;Extracted using CourtThread&trade;&quot; provenance footer.
+            Print uses your browser&apos;s dialog (choose &quot;Save as PDF&quot; as the destination).
           </p>
         </div>
       </div>

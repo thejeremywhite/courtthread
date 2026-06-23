@@ -80,6 +80,7 @@ export async function POST(request: NextRequest) {
     const { type, format, includeProvenance, includeTimestamps, includeBatesNumbers, batesPrefix, batesStart } = body;
     const includeMedia = body.includeMedia !== false; // default on
     const embedMedia = body.embedMedia === true && format === "html"; // bundle real files into a ZIP
+    const inlineMedia = body.inlineMedia === true && format === "html"; // live <img> tags (for print/PDF)
 
     // Export search results (with their context) exactly as shown on the search page,
     // matched term highlighted. Used by the search page Export buttons.
@@ -273,7 +274,7 @@ export async function POST(request: NextRequest) {
 
     // For media embedding: map each source to its on-disk directory (skip upload:// sources).
     const sourceDirs = new Map<string, string | null>();
-    if (embedMedia) {
+    if (embedMedia || inlineMedia) {
       const srcIds = Array.from(new Set(messages.map((m) => m.source_id).filter(Boolean)));
       for (const sid of srcIds) {
         try {
@@ -366,6 +367,24 @@ export async function POST(request: NextRequest) {
               } else {
                 mediaMissing++;
               }
+            }
+          }
+          // Print/PDF: reference the live media endpoint so images render inline
+          // (works for folder-imported sources; the dev server serves the file).
+          if (!embedded && inlineMedia && mm.filename) {
+            const dir = sourceDirs.get(m.source_id);
+            if (dir && resolveMediaPath(dir, mm.filename, mm.type)) {
+              const src = `/api/media?sourceId=${encodeURIComponent(m.source_id)}&filename=${encodeURIComponent(mm.filename)}&type=${encodeURIComponent(mm.type)}`;
+              if (mm.type === "image" || mm.type === "sticker" || mm.type === "gif") {
+                parts.push(`<img class="media" src="${src}" alt="${escapeHtml(mm.filename)}">`);
+              } else if (mm.type === "video") {
+                parts.push(`<video class="media" controls src="${src}"></video>`);
+              } else if (mm.type === "audio") {
+                parts.push(`<audio class="media" controls src="${src}"></audio>`);
+              } else {
+                parts.push(`<a href="${src}">${escapeHtml(mm.filename)}</a>`);
+              }
+              embedded = true;
             }
           }
           if (!embedded) {
