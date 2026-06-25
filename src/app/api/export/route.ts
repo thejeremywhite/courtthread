@@ -413,6 +413,20 @@ function _cropApply(){
   _refreshAvatarPreview();_renderAvatarGallery();_rebuildLayout();
 }
 function _cropCancel(){var d=document.getElementById('ps-crop');if(d)d.style.display='none';_crop=null}
+// PDF "Save as" / print filename comes from document.title — make it the phone chat-header
+// NAME (+ the message date range), so a relabeled export saves as e.g.
+// "Waylon White - Dec 29, 2023 - Dec 29, 2023" instead of the raw conversation title.
+function _updateDocTitle(){
+  var name=((window._chromeName||'')+'').trim();if(!name)return;
+  var ts=[];
+  document.querySelectorAll('.thread [data-ts]').forEach(function(r){var t=r.getAttribute('data-ts');if(t){var d=new Date(t);if(!isNaN(d.getTime()))ts.push(d.getTime())}});
+  var title=name;
+  if(ts.length){
+    var f=function(d){return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})};
+    title=name+' - '+f(new Date(Math.min.apply(null,ts)))+' - '+f(new Date(Math.max.apply(null,ts)));
+  }
+  document.title=title;
+}
 function _clearAvatar(){
   var nm=(_val('ps-chat-name')||window._chromeName||'');
   var db=_loadAvatarDB();if(db[_norm(nm)]){delete db[_norm(nm)];_saveAvatarDB(db)}
@@ -850,6 +864,7 @@ function applyPageSetup(silent){
   window._chromeName=(chatNameEl&&chatNameEl.value.trim())?chatNameEl.value.trim():'Jessica Arsenault';
   // The provenance is mirrored into the print table's thead/tfoot, so rebuild to apply.
   _rebuildLayout();
+  _updateDocTitle();   // PDF / save filename follows the chat-header name
   // silent === true when re-applying saved settings on load; otherwise persist + close.
   if(silent!==true){_saveGlobalPrefs();_saveSettings();closePageSetup()}
 }
