@@ -264,8 +264,8 @@ function _fmtTs(iso){
 
 function _colorize(root,d){
   root.querySelectorAll('.bubble-out').forEach(function(b){b.style.background='linear-gradient(160deg,#2a8bff 0%,#3b6ef5 45%,#6a5cf0 100%)'});
-  root.querySelectorAll('.bubble-in').forEach(function(b){b.style.background=d?'#303030':'#c4cad3';b.style.color=d?'#ededed':'#0a0a0a'});
-  root.querySelectorAll('.bubble-call').forEach(function(b){b.style.background=d?'#303030':'#c4cad3';b.style.color=d?'#a1a1aa':'#4a4d52'});
+  root.querySelectorAll('.bubble-in').forEach(function(b){b.style.background=d?'#303030':'#ffffff';b.style.color=d?'#ededed':'#0a0a0a'});
+  root.querySelectorAll('.bubble-call').forEach(function(b){b.style.background=d?'#303030':'#ffffff';b.style.color=d?'#a1a1aa':'#4a4d52'});
   root.querySelectorAll('.sender-name').forEach(function(e){e.style.color=d?'#a1a1aa':'#65676b'});
   root.querySelectorAll('.date-label').forEach(function(e){e.style.color=d?'#a1a1aa':'#65676b'});
 }
@@ -780,9 +780,11 @@ document.addEventListener('DOMContentLoaded',_initLayout);
     const senderColor = isDark ? "#a1a1aa" : "#65676b";
     // Light grays near white read PINK on Jeremy's monitor. A COOL-biased (blue-leaning)
     // gray reads neutral. Light mode uses a lighter cool gray; dark mode stays #303030.
-    const bubbleIn = isDark ? "#303030" : "#c4cad3";
+    // On the swirl wallpaper Messenger uses WHITE incoming bubbles in light mode
+    // (dark gray in dark mode).
+    const bubbleIn = isDark ? "#303030" : "#ffffff";
     const bubbleInColor = isDark ? "#ededed" : "#0a0a0a";
-    const bubbleCallBg = isDark ? "#303030" : "#c4cad3";
+    const bubbleCallBg = isDark ? "#303030" : "#ffffff";
     const bubbleCallColor = isDark ? "#a1a1aa" : "#4a4d52";
     const timeColor = isDark ? "#71717a" : "#8d949e";
     const mediaRefBg = isDark ? "#3a3500" : "#fff4cc";
@@ -814,7 +816,7 @@ body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;font-size:13px;mar
 .phone-viewport .call-ico{width:2em;height:2em;font-size:1.05em}
 .phone-viewport .call-title{font-size:0.87em}
 .phone-viewport .call-dur{font-size:0.73em}
-.msg-text{font-size:15px;white-space:pre-wrap;word-break:break-word;margin:0}
+.msg-text{font-size:15px;font-weight:500;white-space:pre-wrap;word-break:break-word;margin:0}
 .msg-time{font-size:10px;color:${timeColor};margin:2px 0 0 12px;display:none}.msg-time-out{text-align:right;margin-right:12px;margin-left:0;display:none}
 .bates{font-size:10px;color:#999;font-family:monospace;margin-left:12px}
 .media-only img,.media-only video{max-width:100%;max-height:280px;border-radius:12px;display:block;margin-top:4px}
