@@ -970,16 +970,18 @@ body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;font-size:13px;mar
 .call-head{display:flex;align-items:center;gap:10px}
 .call-ico{width:36px;height:36px;border-radius:50%;background:${isDark ? '#5b5d63' : '#c8cdd4'};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
 .call-ico-missed{background:#fa3e3e;color:#fff}
+.call-ico svg{width:58%;height:58%;display:block}
 .call-meta{display:flex;flex-direction:column;line-height:1.2;min-width:0}
 .call-title{font-size:15px;font-weight:600}
 .call-dur{font-size:13px;color:${isDark ? '#b0b3b8' : '#65676b'}}
 .call-back{margin-top:10px;text-align:center;padding:8px;border-radius:8px;background:${isDark ? '#4a4c51' : '#e4e6eb'};color:${isDark ? '#e4e6eb' : '#050505'};font-size:14px;font-weight:600}
-.phone-viewport .call-card{min-width:11.5em;max-width:17em;padding:0.73em 0.85em;border-radius:1.2em}
-.phone-viewport .call-head{gap:0.6em}
-.phone-viewport .call-ico{width:2.4em;height:2.4em;font-size:1.3em}
-.phone-viewport .call-title{font-size:1em}
-.phone-viewport .call-dur{font-size:0.85em}
-.phone-viewport .call-back{margin-top:0.6em;padding:0.5em;border-radius:0.55em;font-size:0.9em}
+.phone-viewport .call-col{max-width:78%}
+.phone-viewport .call-card{width:16.8em;padding:0.65em 0.78em;border-radius:0.7em}
+.phone-viewport .call-head{gap:0.9em}
+.phone-viewport .call-ico{width:2.05em;height:2.05em}
+.phone-viewport .call-title{font-size:1.15em}
+.phone-viewport .call-dur{font-size:0.72em}
+.phone-viewport .call-back{margin-top:1em;padding:0.55em;border-radius:0.5em;font-size:1.1em}
 .msg-text{font-size:15px;font-weight:500;white-space:pre-wrap;word-break:break-word;margin:0}
 .msg-time{font-size:10px;color:${timeColor};margin:2px 0 0 12px;display:none}.msg-time-out{text-align:right;margin-right:12px;margin-left:0;display:none}
 .bates{font-size:10px;color:#999;font-family:monospace;margin-left:12px}
@@ -1005,7 +1007,7 @@ audio.media{width:100%;display:block;margin:4px 0}
 .phone-viewport .bubble-out,.phone-viewport .bubble-in{padding:0.667em 0.933em;border-radius:1.2em;word-break:break-word;overflow-wrap:break-word}
 /* Message text is ALWAYS left-aligned — the cell's text-align:center (which centres the
    phone column + the provenance) must never cascade into the bubbles. */
-.phone-viewport .bubble-in,.phone-viewport .bubble-out,.phone-viewport .bubble-call,.phone-viewport .msg-text{text-align:left}
+.phone-viewport .bubble-in,.phone-viewport .bubble-out,.phone-viewport .bubble-call,.phone-viewport .msg-text,.phone-viewport .call-card,.phone-viewport .call-title,.phone-viewport .call-dur{text-align:left}
 .phone-viewport .sender-name{font-size:0.8em;margin:0 0 0.133em 3.2em}
 .phone-viewport .msg-time{font-size:0.667em;opacity:0.7}
 .phone-viewport .msg-text{font-size:inherit}
@@ -1799,12 +1801,15 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
           if (totalSecs < 60) { callSub = `${totalSecs} ${totalSecs === 1 ? 'sec' : 'secs'}`; }
           else { const hr = Math.floor(totalSecs / 3600); const mn = Math.floor((totalSecs % 3600) / 60); callSub = (hr > 0 ? `${hr} ${hr === 1 ? 'hr' : 'hrs'} ` : '') + `${mn} ${mn === 1 ? 'min' : 'mins'}`; }
         } else { callSub = durRaw; }
-        const camSvg = `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>`;
-        const phoneSvg = `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
-        const callIco = isAudio ? phoneSvg : camSvg;
+        const camSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>`;
+        // Missed video: white camera body + lens with an X (painted in the missed-icon red
+        // so it reads as a knockout), matching Messenger's missed-video glyph exactly.
+        const camMissedSvg = `<svg viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="12" height="11" rx="2.6" fill="#fff"/><path d="M16.5 11 L22 7.2 V16.8 L16.5 13 Z" fill="#fff"/><path d="M5.7 9.8 L11.3 15.4 M11.3 9.8 L5.7 15.4" stroke="#fa3e3e" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>`;
+        const phoneSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
+        const callIco = isAudio ? phoneSvg : (missed ? camMissedSvg : camSvg);
         html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
         if (!isOut) html += `<img class="sender-avatar" src="/phone-chrome/profile.png" alt="" onerror="this.style.display='none'">`;
-        html += `<div class="msg-col"><div class="call-card">`
+        html += `<div class="msg-col call-col"><div class="call-card">`
           + `<div class="call-head"><span class="call-ico${missed ? ' call-ico-missed' : ''}">${callIco}</span>`
           + `<span class="call-meta"><span class="call-title">${escapeHtml(callTitle)}</span><span class="call-dur">${escapeHtml(callSub)}</span></span></div>`
           + `<div class="call-back">Call back</div></div>${batesLabel}</div></div>\n`;
