@@ -507,7 +507,7 @@ function applyNup(n){
     if(window._chromeTimeStr){
       var clk=document.createElement('div');
       clk.textContent=window._chromeTimeStr;
-      clk.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.026)+'px;top:'+(phoneH*0.0091)+'px;width:'+(phoneW*0.092)+'px;height:'+(phoneH*0.025)+'px;background:'+(d?'#000':'rgb(242,250,253)')+';display:flex;align-items:center;justify-content:flex-start;padding-left:'+(phoneW*0.009)+'px;font-family:Roboto,Arial,sans-serif;font-weight:700;font-size:'+(phoneH*0.0163)+'px;line-height:1;color:'+(d?'#ededed':'#45484a')+';-webkit-print-color-adjust:exact;print-color-adjust:exact';
+      clk.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.026)+'px;top:'+(phoneH*0.0091)+'px;width:'+(phoneW*0.14)+'px;height:'+(phoneH*0.025)+'px;background:'+(d?'#000':'rgb(242,250,253)')+';display:flex;align-items:center;justify-content:flex-start;white-space:nowrap;overflow:visible;padding-left:'+(phoneW*0.009)+'px;font-family:Roboto,Arial,sans-serif;font-weight:700;font-size:'+(phoneH*0.0163)+'px;line-height:1;color:'+(d?'#ededed':'#45484a')+';-webkit-print-color-adjust:exact;print-color-adjust:exact';
       pv.appendChild(clk);
     }
     var td=document.createElement('td');td.className='pt-cell';td.appendChild(pv);
