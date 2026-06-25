@@ -419,8 +419,8 @@ function applyNup(n){
   var perRow=(n===1?1:2);
   // Sizes (px == print inches @96dpi, aspect 2340/1080 preserved):
   //  1-up & 2-up share 3.5in wide (1-up centered, 2-up two side-by-side per page).
-  //  4-up is capped at 4.5in TALL so 2 rows (=4 phones) fit a page -> ~2.08in wide.
-  var phoneW=(n===4?200:336);
+  //  4-up ~1.93in wide / 4.18in tall so 2 rows (=4 phones) reliably fit one page.
+  var phoneW=(n===4?185:336);
   var phoneH=Math.round(phoneW*RATIO);
   var fontSize=Math.round(15*(phoneW/REF)*10)/10;
   var bgImg=d?'/phone-chrome/dark.png':'/phone-chrome/light.png';
@@ -868,7 +868,7 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
 .ct-footer,.has-toolbar .ct-footer{display:flex!important;align-items:center;justify-content:center;position:fixed;bottom:0;left:0.4in;right:0.4in;height:0.5in;background:#fff;font-size:9px;color:#333;text-align:center;word-break:break-all;z-index:50}
 .thread-bezel{display:block!important;max-width:none!important;padding:0;margin:0;box-shadow:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
 .thread{display:block!important;padding:0;margin:0;overflow:visible;max-width:none!important;background:transparent!important;zoom:1!important}
-.phone-table{margin:0 auto;border-collapse:separate;border-spacing:0.22in 0.28in;width:auto}
+.phone-table{margin:0 auto;border-collapse:separate;border-spacing:0.2in 0.18in;width:auto}
 .phone-table tbody tr{page-break-inside:avoid;break-inside:avoid}
 .pt-cell{vertical-align:top;text-align:center;padding:0;page-break-inside:avoid;break-inside:avoid}
 .phone-viewport{box-shadow:none!important}
