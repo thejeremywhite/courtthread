@@ -245,7 +245,9 @@ export async function POST(request: NextRequest) {
 <button type="button" onclick="_clearAvatar()" style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #555;background:#333;color:#aaa;cursor:pointer">Reset</button>
 </div>
 <div id="ps-avatar-note" style="font-size:11px;color:#888;margin-top:4px"></div>
-<div style="display:flex;gap:12px;margin-top:8px">
+<div style="font-size:11px;color:#aaa;margin-top:8px">Or choose a saved photo (click to use it for this name):</div>
+<div id="ps-avatar-gallery" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px"></div>
+<div style="display:flex;gap:12px;margin-top:12px">
 <label style="flex:1">Font size (px): <input type="number" id="ps-hdr-size" min="6" max="96" step="1" value="12" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px"></label>
 <label style="flex:1">Font: <select id="ps-hdr-font" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
 <option value="inherit">Default (Segoe UI)</option><option value="'Times New Roman',serif">Times New Roman</option><option value="'Courier New',monospace">Courier New</option><option value="Arial,sans-serif">Arial</option><option value="Georgia,serif">Georgia</option>
@@ -284,6 +286,21 @@ export async function POST(request: NextRequest) {
 </div>
 </div>
 </div>
+<div id="ps-crop" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,0.82);align-items:center;justify-content:center">
+<div style="background:#1e1e1e;border:1px solid #444;border-radius:12px;padding:20px;width:320px;color:#eee;text-align:center">
+<h3 style="margin:0 0 4px;font-size:15px;font-weight:600">Position photo</h3>
+<div style="font-size:11px;color:#888;margin-bottom:12px">Drag to move, slider to zoom. The circle is the crop.</div>
+<div id="ps-crop-box" style="position:relative;width:260px;height:260px;margin:0 auto;overflow:hidden;background:#000;touch-action:none;cursor:move" onpointerdown="_cropDown(event)" onpointermove="_cropMove(event)" onpointerup="_cropUp(event)" onpointerleave="_cropUp(event)">
+<img id="ps-crop-img" alt="" style="position:absolute;left:0;top:0;transform-origin:0 0;pointer-events:none;-webkit-user-drag:none">
+<div style="position:absolute;inset:0;box-shadow:0 0 0 9999px rgba(0,0,0,0.55);border-radius:50%;pointer-events:none"></div>
+</div>
+<input type="range" id="ps-crop-zoom" min="1" max="4" step="0.01" value="1" oninput="_cropZoom(this.value)" style="width:100%;margin:14px 0 10px">
+<div style="display:flex;justify-content:flex-end;gap:8px">
+<button type="button" onclick="_cropCancel()" style="padding:8px 16px;border-radius:6px;border:1px solid #555;background:#333;color:#eee;cursor:pointer;font-size:13px">Cancel</button>
+<button type="button" onclick="_cropApply()" style="padding:8px 16px;border-radius:6px;border:none;background:#3578E5;color:#fff;cursor:pointer;font-size:13px;font-weight:600">Use photo</button>
+</div>
+</div>
+</div>
 <script>
 window._chromeTimeStr=${JSON.stringify(chromeTimeStr)};
 // Phone-chat header identity. The chrome PNG has "Jessica Arsenault" + her photo baked in,
@@ -318,32 +335,80 @@ function _avatarFor(name){
 function _refreshAvatarPreview(){
   var nm=(_val('ps-hdr-text')||window._chromeName||'');
   var img=document.getElementById('ps-avatar-preview');if(img)img.src=_avatarFor(nm);
+  _renderAvatarGallery();
   var note=document.getElementById('ps-avatar-note');if(!note)return;
   if(_hasBuiltinAvatar(nm))note.textContent='Using the built-in photo for this name.';
-  else if(_loadAvatarDB()[_norm(nm)])note.textContent='Using your uploaded photo for "'+nm+'" (saved for future exports).';
-  else note.textContent='No photo matches "'+nm+'". Upload one and it will be saved for this name.';
+  else if(_loadAvatarDB()[_norm(nm)])note.textContent='Using your saved photo for "'+nm+'" (kept for future exports).';
+  else note.textContent='No photo matches "'+nm+'". Upload one (you can crop it), or pick a saved photo below.';
 }
+// Built-in photos offered in the picker gallery (so a name like "Facebook user" can be
+// pointed at Waylon's photo without typing his name).
+var _AVATAR_CHOICES=[{label:'Jessica Arsenault',src:'/phone-chrome/profile.png'},{label:'Waylon White',src:'/phone-chrome/profile-waylon.png'}];
+function _renderAvatarGallery(){
+  var g=document.getElementById('ps-avatar-gallery');if(!g)return;
+  var items=_AVATAR_CHOICES.slice();
+  var db=_loadAvatarDB();var seen={};
+  _AVATAR_CHOICES.forEach(function(c){seen[c.src]=1});
+  Object.keys(db).forEach(function(k){var s=db[k];if(s&&!seen[s]){seen[s]=1;items.push({label:k,src:s})}});
+  g.innerHTML='';
+  var cur=_avatarFor(_val('ps-hdr-text')||window._chromeName||'');
+  items.forEach(function(it){
+    var im=document.createElement('img');im.src=it.src;im.title=it.label;
+    im.style.cssText='width:42px;height:42px;border-radius:50%;object-fit:cover;cursor:pointer;background:#333;border:2px solid '+(it.src===cur?'#3578E5':'#555');
+    im.onclick=function(){_pickAvatar(it.src)};
+    g.appendChild(im);
+  });
+}
+function _pickAvatar(src){
+  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  if(!nm){alert('Type the name in the Header text first.');return}
+  var db=_loadAvatarDB();db[_norm(nm)]=src;_saveAvatarDB(db);
+  window._chromeName=nm;_refreshAvatarPreview();_renderAvatarGallery();_rebuildLayout();
+}
+// Facebook-style crop: uploading opens a draggable + zoomable circle cropper instead of a
+// blind centre-crop, so non-square photos can be framed properly.
+var _crop=null;
 function _onAvatarFile(input){
-  var f=input.files&&input.files[0];if(!f)return;
+  var f=input.files&&input.files[0];if(!f){return}
+  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  if(!nm){alert('Type the name in the Header text first, then upload.');input.value='';return}
   var rd=new FileReader();
-  rd.onload=function(){
-    var im=new Image();
-    im.onload=function(){
-      var S=256,cv=document.createElement('canvas');cv.width=S;cv.height=S;
-      var ctx=cv.getContext('2d');
-      var s=Math.min(im.width,im.height),sx=(im.width-s)/2,sy=(im.height-s)/2;
-      ctx.drawImage(im,sx,sy,s,s,0,0,S,S);
-      var nm=(_val('ps-hdr-text')||window._chromeName||'');
-      if(!nm){alert('Type the name in the Header text first, then upload.');return}
-      var db=_loadAvatarDB();db[_norm(nm)]=cv.toDataURL('image/jpeg',0.9);_saveAvatarDB(db);
-      window._chromeName=nm;_refreshAvatarPreview();_rebuildLayout();
-    };
-    im.onerror=function(){alert('Could not read that image file.')};
-    im.src=rd.result;
-  };
+  rd.onload=function(){_openCropper(rd.result,nm)};
+  rd.onerror=function(){alert('Could not read that file.')};
   rd.readAsDataURL(f);
   input.value='';
 }
+function _openCropper(dataURL,name){
+  var img=new Image();
+  img.onload=function(){
+    var B=260;var base=Math.max(B/img.naturalWidth,B/img.naturalHeight);
+    _crop={img:img,name:name,B:B,base:base,scale:base,ox:0,oy:0,natW:img.naturalWidth,natH:img.naturalHeight,dragging:false,sx:0,sy:0};
+    _crop.ox=(B-img.naturalWidth*base)/2;_crop.oy=(B-img.naturalHeight*base)/2;
+    var ci=document.getElementById('ps-crop-img');ci.src=dataURL;
+    var z=document.getElementById('ps-crop-zoom');if(z)z.value='1';
+    _cropApplyTransform();
+    document.getElementById('ps-crop').style.display='flex';
+  };
+  img.onerror=function(){alert('Could not read that image file.')};
+  img.src=dataURL;
+}
+function _cropClamp(){var c=_crop;var w=c.natW*c.scale,h=c.natH*c.scale;if(c.ox>0)c.ox=0;if(c.ox<c.B-w)c.ox=c.B-w;if(c.oy>0)c.oy=0;if(c.oy<c.B-h)c.oy=c.B-h}
+function _cropApplyTransform(){if(!_crop)return;_cropClamp();var ci=document.getElementById('ps-crop-img');ci.style.width=_crop.natW+'px';ci.style.height=_crop.natH+'px';ci.style.transform='translate('+_crop.ox+'px,'+_crop.oy+'px) scale('+_crop.scale+')'}
+function _cropZoom(v){if(!_crop)return;var c=_crop;var ns=c.base*parseFloat(v);var cx=c.B/2,cy=c.B/2;var ix=(cx-c.ox)/c.scale,iy=(cy-c.oy)/c.scale;c.scale=ns;c.ox=cx-ix*ns;c.oy=cy-iy*ns;_cropApplyTransform()}
+function _cropDown(e){if(!_crop)return;_crop.dragging=true;_crop.sx=e.clientX;_crop.sy=e.clientY;if(e.currentTarget.setPointerCapture){try{e.currentTarget.setPointerCapture(e.pointerId)}catch(x){}}}
+function _cropMove(e){if(!_crop||!_crop.dragging)return;_crop.ox+=e.clientX-_crop.sx;_crop.oy+=e.clientY-_crop.sy;_crop.sx=e.clientX;_crop.sy=e.clientY;_cropApplyTransform()}
+function _cropUp(){if(_crop)_crop.dragging=false}
+function _cropApply(){
+  if(!_crop)return;var c=_crop;var S=256;
+  var cv=document.createElement('canvas');cv.width=S;cv.height=S;var ctx=cv.getContext('2d');
+  var srcW=c.B/c.scale,srcH=c.B/c.scale,srcX=-c.ox/c.scale,srcY=-c.oy/c.scale;
+  ctx.drawImage(c.img,srcX,srcY,srcW,srcH,0,0,S,S);
+  var db=_loadAvatarDB();db[_norm(c.name)]=cv.toDataURL('image/jpeg',0.9);_saveAvatarDB(db);
+  window._chromeName=c.name;
+  document.getElementById('ps-crop').style.display='none';_crop=null;
+  _refreshAvatarPreview();_renderAvatarGallery();_rebuildLayout();
+}
+function _cropCancel(){var d=document.getElementById('ps-crop');if(d)d.style.display='none';_crop=null}
 function _clearAvatar(){
   var nm=(_val('ps-hdr-text')||window._chromeName||'');
   var db=_loadAvatarDB();if(db[_norm(nm)]){delete db[_norm(nm)];_saveAvatarDB(db)}
