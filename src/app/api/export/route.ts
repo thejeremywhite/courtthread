@@ -690,10 +690,10 @@ function applyNup(n){
     // a different person is chosen, so the default stays pixel-perfect. The header bg is a
     // flat colour (light rgb(242,250,253) / dark #000) so the name cover-patch is seamless.
     if(_chromeAv&&_chromeAv!=='/phone-chrome/profile.png'){
-      var avD=phoneW*0.095;
+      var avD=phoneW*0.10;
       var av=document.createElement('img');
       av.src=_chromeAv;av.setAttribute('alt','');
-      av.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.1954-avD/2)+'px;top:'+(phoneH*0.0752-avD/2)+'px;width:'+avD+'px;height:'+avD+'px;border-radius:50%;object-fit:cover;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+      av.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.190-avD/2)+'px;top:'+(phoneH*0.0752-avD/2)+'px;width:'+avD+'px;height:'+avD+'px;border-radius:50%;object-fit:cover;-webkit-print-color-adjust:exact;print-color-adjust:exact';
       av.onerror=function(){this.style.display='none'};
       pv.appendChild(av);
     }
