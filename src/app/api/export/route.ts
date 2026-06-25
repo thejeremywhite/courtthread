@@ -1669,9 +1669,10 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
       const timeDiff = curTime - prevTime;
       const curDay = new Date(m.timestamp).toDateString();
       const prevDay = prevTime ? new Date(prevTime).toDateString() : '';
-      // Messenger groups messages: show a centered timestamp only on a new day or a
-      // significant (>20 min) gap — NOT on every message or every sender change.
-      const showHeader = includeTimestamps && (timeDiff > 1200000 || curDay !== prevDay || prevTime === 0);
+      // Messenger shows a centered timestamp on a new day, after a significant (>20 min)
+      // gap, and ALWAYS above a call log entry — but NOT on every message or every
+      // sender change.
+      const showHeader = includeTimestamps && (isCall || timeDiff > 1200000 || curDay !== prevDay || prevTime === 0);
       const nextMsg = mi + 1 < messages.length ? messages[mi + 1] : null;
       // Avatar sits next to the LAST incoming message of a run: next msg is outgoing,
       // a different sender, or far enough apart to start a new group.
