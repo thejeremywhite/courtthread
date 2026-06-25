@@ -270,6 +270,10 @@ function _colorize(root,d){
   root.querySelectorAll('.bubble-out').forEach(function(b){b.style.background='linear-gradient(160deg,#2a8bff 0%,#3b6ef5 45%,#6a5cf0 100%)'});
   root.querySelectorAll('.bubble-in').forEach(function(b){b.style.background=d?'#303030':'#ffffff';b.style.color=d?'#ededed':'#0a0a0a'});
   root.querySelectorAll('.bubble-call').forEach(function(b){b.style.background=d?'#303030':'#ffffff';b.style.color=d?'#a1a1aa':'#4a4d52'});
+  root.querySelectorAll('.call-card').forEach(function(b){b.style.background=d?'#303030':'#ffffff';b.style.color=d?'#ededed':'#050505'});
+  root.querySelectorAll('.call-ico:not(.call-ico-missed)').forEach(function(e){e.style.background=d?'#5b5d63':'#c8cdd4'});
+  root.querySelectorAll('.call-dur').forEach(function(e){e.style.color=d?'#b0b3b8':'#65676b'});
+  root.querySelectorAll('.call-back').forEach(function(e){e.style.background=d?'#4a4c51':'#e4e6eb';e.style.color=d?'#e4e6eb':'#050505'});
   root.querySelectorAll('.sender-name').forEach(function(e){e.style.color=d?'#a1a1aa':'#65676b'});
   root.querySelectorAll('.date-label').forEach(function(e){e.style.color=d?'#a1a1aa':'#65676b'});
 }
@@ -864,17 +868,23 @@ body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;font-size:13px;mar
 .bubble-out{padding:10px 14px;border-radius:18px;background:linear-gradient(160deg,#2a8bff 0%,#3b6ef5 45%,#6a5cf0 100%);color:#fff}.bubble-in{padding:10px 14px;border-radius:18px;background:${bubbleIn};color:${bubbleInColor}}
 .bubble-call{display:inline-block;padding:4px 12px;border-radius:16px;background:${bubbleCallBg};color:${bubbleCallColor};font-size:12px;margin:2px auto}
 .call-row{display:flex;justify-content:center;margin-bottom:4px}
-/* Messenger-style video-call log element */
-.call-evt{display:flex;align-items:center;justify-content:center;gap:8px;margin:10px auto;color:${senderColor}}
-.call-ico{width:30px;height:30px;border-radius:50%;background:#3b6ef5;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
-.call-ico-missed{background:#e0414b}
-.call-meta{display:flex;flex-direction:column;line-height:1.15}
-.call-title{font-size:13px;font-weight:600}
-.call-dur{font-size:11px;opacity:0.7}
-.phone-viewport .call-evt{margin:0.6em auto;gap:0.5em}
-.phone-viewport .call-ico{width:2em;height:2em;font-size:1.05em}
-.phone-viewport .call-title{font-size:0.87em}
-.phone-viewport .call-dur{font-size:0.73em}
+/* Messenger call-log card: round icon + title + subtitle (call time when missed,
+   duration when answered) + a "Call back" button. Rendered inside a normal msg-row,
+   so direction places it left (with avatar) / right just like a message bubble. */
+.call-card{display:inline-block;min-width:11.5em;max-width:300px;padding:12px 14px;border-radius:18px;background:${bubbleIn};color:${bubbleInColor}}
+.call-head{display:flex;align-items:center;gap:10px}
+.call-ico{width:36px;height:36px;border-radius:50%;background:${isDark ? '#5b5d63' : '#c8cdd4'};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.call-ico-missed{background:#fa3e3e;color:#fff}
+.call-meta{display:flex;flex-direction:column;line-height:1.2;min-width:0}
+.call-title{font-size:15px;font-weight:600}
+.call-dur{font-size:13px;color:${isDark ? '#b0b3b8' : '#65676b'}}
+.call-back{margin-top:10px;text-align:center;padding:8px;border-radius:8px;background:${isDark ? '#4a4c51' : '#e4e6eb'};color:${isDark ? '#e4e6eb' : '#050505'};font-size:14px;font-weight:600}
+.phone-viewport .call-card{min-width:11.5em;max-width:17em;padding:0.73em 0.85em;border-radius:1.2em}
+.phone-viewport .call-head{gap:0.6em}
+.phone-viewport .call-ico{width:2.4em;height:2.4em;font-size:1.3em}
+.phone-viewport .call-title{font-size:1em}
+.phone-viewport .call-dur{font-size:0.85em}
+.phone-viewport .call-back{margin-top:0.6em;padding:0.5em;border-radius:0.55em;font-size:0.9em}
 .msg-text{font-size:15px;font-weight:500;white-space:pre-wrap;word-break:break-word;margin:0}
 .msg-time{font-size:10px;color:${timeColor};margin:2px 0 0 12px;display:none}.msg-time-out{text-align:right;margin-right:12px;margin-left:0;display:none}
 .bates{font-size:10px;color:#999;font-family:monospace;margin-left:12px}
@@ -1654,18 +1664,62 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
       const mediaRefs = includeMedia ? getMediaRefs(m.metadata) : [];
       const batesLabel = includeBatesNumbers ? `<span class="bates">${batesPrefix}-${(batesCounter++).toString().padStart(4, "0")}</span>` : "";
 
+      const curSender = m.sender_name || 'Unknown';
+      const curTime = new Date(m.timestamp).getTime();
+      const timeDiff = curTime - prevTime;
+      const curDay = new Date(m.timestamp).toDateString();
+      const prevDay = prevTime ? new Date(prevTime).toDateString() : '';
+      // Messenger groups messages: show a centered timestamp only on a new day or a
+      // significant (>20 min) gap — NOT on every message or every sender change.
+      const showHeader = includeTimestamps && (timeDiff > 1200000 || curDay !== prevDay || prevTime === 0);
+      const nextMsg = mi + 1 < messages.length ? messages[mi + 1] : null;
+      // Avatar sits next to the LAST incoming message of a run: next msg is outgoing,
+      // a different sender, or far enough apart to start a new group.
+      const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1200000));
+
+      if (showHeader) {
+        html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${escapeHtml(formatTimestamp(m.timestamp))}</span></div>\n`;
+      }
+
       if (isCall) {
-        // Messenger-style video-call log element: round video-camera icon + "Video chat"
-        // (or "Missed video chat" when the duration is 0) + the duration. Centered.
-        const durRaw = (m.content || '').replace(/^call duration:\s*/i, '').trim();
-        const missed = durRaw === '' || /^0m\s*0s$/i.test(durRaw);
-        const title = missed ? 'Missed video chat' : 'Video chat';
-        const camSvg = `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1.5" y="5.5" width="14" height="13" rx="2.5"/></svg>`;
-        html += `<div class="call-evt" data-ts="${m.timestamp}"><span class="call-ico${missed ? ' call-ico-missed' : ''}">${camSvg}</span><span class="call-meta"><span class="call-title">${title}</span>${missed ? '' : `<span class="call-dur">${escapeHtml(durRaw)}</span>`}</span>${batesLabel}</div>\n`;
+        // Messenger call-log card: round icon + title + subtitle + "Call back" button.
+        // A logged duration of 0m 0s means the call was never answered → it is shown as
+        // a "Missed" call (in one direction); the subtitle then shows the call time
+        // instead of a duration. Direction (is_incoming) places the card left (with the
+        // sender avatar) or right, exactly like a message bubble.
+        const durRaw = (m.content || '').replace(/^call\s*(?:duration|info)\s*:\s*/i, '').trim();
+        const dm = durRaw.match(/(\d+)\s*m\s*(\d+)\s*s/i);
+        const totalSecs = dm ? (parseInt(dm[1], 10) * 60 + parseInt(dm[2], 10)) : (durRaw === '' ? 0 : -1);
+        const missed = totalSecs === 0 || /missed/i.test(m.content || '');
+        // Audio vs video — fall back to audio only if the source text clearly says so.
+        const isAudio = /\b(?:audio|voice)\b/i.test(m.content || '');
+        const kind = isAudio ? 'audio' : 'video';
+        const callTitle = missed ? `Missed ${kind} call` : (kind === 'audio' ? 'Audio call' : 'Video call');
+        // subtitle: missed → the call's clock time; answered → a human duration
+        let callSub;
+        if (missed) {
+          callSub = new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        } else if (totalSecs > 0) {
+          if (totalSecs < 60) { callSub = `${totalSecs} ${totalSecs === 1 ? 'sec' : 'secs'}`; }
+          else { const hr = Math.floor(totalSecs / 3600); const mn = Math.floor((totalSecs % 3600) / 60); callSub = (hr > 0 ? `${hr} ${hr === 1 ? 'hr' : 'hrs'} ` : '') + `${mn} ${mn === 1 ? 'min' : 'mins'}`; }
+        } else { callSub = durRaw; }
+        const camSvg = `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>`;
+        const phoneSvg = `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
+        const callIco = isAudio ? phoneSvg : camSvg;
+        html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
+        if (!isOut) html += `<img class="sender-avatar" src="/phone-chrome/profile.png" alt="" onerror="this.style.display='none'">`;
+        html += `<div class="msg-col"><div class="call-card">`
+          + `<div class="call-head"><span class="call-ico${missed ? ' call-ico-missed' : ''}">${callIco}</span>`
+          + `<span class="call-meta"><span class="call-title">${escapeHtml(callTitle)}</span><span class="call-dur">${escapeHtml(callSub)}</span></span></div>`
+          + `<div class="call-back">Call back</div></div>${batesLabel}</div></div>\n`;
+        prevSender = curSender;
+        prevTime = curTime;
         continue;
       }
       if (isSystem) {
         html += `<div class="call-row" data-ts="${m.timestamp}"><span class="bubble-call">${escapeHtml(m.content || '')}${batesLabel}</span></div>\n`;
+        prevSender = curSender;
+        prevTime = curTime;
         continue;
       }
 
@@ -1717,22 +1771,6 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
       const hasOnlyMedia = !baseContent && mediaHtml;
       const bubbleClass = isOut ? 'bubble-out' : 'bubble-in';
 
-      const curSender = m.sender_name || 'Unknown';
-      const curTime = new Date(m.timestamp).getTime();
-      const timeDiff = curTime - prevTime;
-      const curDay = new Date(m.timestamp).toDateString();
-      const prevDay = prevTime ? new Date(prevTime).toDateString() : '';
-      // Messenger groups messages: show a centered timestamp only on a new day or a
-      // significant (>20 min) gap — NOT on every message or every sender change.
-      const showHeader = includeTimestamps && (timeDiff > 1200000 || curDay !== prevDay || prevTime === 0);
-      const nextMsg = mi + 1 < messages.length ? messages[mi + 1] : null;
-      // Avatar sits next to the LAST incoming message of a run: next msg is outgoing,
-      // a different sender, or far enough apart to start a new group.
-      const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1200000));
-
-      if (showHeader) {
-        html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${escapeHtml(formatTimestamp(m.timestamp))}</span></div>\n`;
-      }
       // NOTE: one-on-one chat — no sender name is rendered (Messenger only shows names
       // in group chats). The avatar identifies the incoming sender instead.
 
