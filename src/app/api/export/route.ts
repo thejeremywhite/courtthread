@@ -442,12 +442,35 @@ function applyNup(n){
   thread.style.maxWidth='none';thread.style.border='none';thread.style.borderRadius='0';thread.style.padding='0';thread.style.background='transparent';thread.style.overflow='visible';thread.style.zoom=String(viewMul);thread.style.display='flex';thread.style.justifyContent='center';
   thread.innerHTML='';
 
-  // Provenance lives in the table's thead/tfoot so the browser REPEATS it on every
-  // printed page (table-header-group / table-footer-group). Page Setup edits the hidden
-  // The provenance header/footer are NOT in the table — they're position:fixed and
-  // anchored to the page top/bottom (see @media print), repeating on every page.
+  // Provenance lives in the table's <thead>/<tfoot>. Chrome's print engine repeats a
+  // table-header-group / table-footer-group on EVERY page AND reserves its vertical space
+  // in the flow — so the phones start BELOW the header and end ABOVE the footer instead
+  // of sliding under a position:fixed band (the old overlap bug). The hidden
+  // .ct-header/.ct-footer divs stay the editable source of truth (Page Setup edits them);
+  // we copy their text + styling into the table groups here.
   var table=document.createElement('table');
   table.className='phone-table';
+  function _provCell(src,cls){
+    var td=document.createElement('td');
+    td.className='pt-prov '+cls;td.colSpan=perRow;
+    if(src){
+      td.textContent=src.textContent;
+      var st=src.style;
+      if(st.fontSize)td.style.fontSize=st.fontSize;
+      if(st.fontFamily)td.style.fontFamily=st.fontFamily;
+      if(st.fontWeight)td.style.fontWeight=st.fontWeight;
+      if(st.textAlign)td.style.textAlign=st.textAlign;
+    }
+    return td;
+  }
+  var _srcHdr=document.querySelector('.ct-header .ct-hdr-title');
+  var _srcFtr=document.querySelector('.ct-footer');
+  if(_srcHdr&&_srcHdr.textContent.trim()){
+    var thead=document.createElement('thead');var htr=document.createElement('tr');
+    var hcell=_provCell(_srcHdr,'pt-prov-hdr');
+    if(_srcHdr.style.paddingBottom)hcell.style.paddingBottom=_srcHdr.style.paddingBottom;
+    htr.appendChild(hcell);thead.appendChild(htr);table.appendChild(thead);
+  }
   var tbody=document.createElement('tbody');
   var tr=document.createElement('tr');var inRow=0;
   for(var p=0;p<pages.length;p++){
@@ -480,6 +503,12 @@ function applyNup(n){
   }
   if(inRow>0){while(inRow<perRow){var etd=document.createElement('td');etd.className='pt-cell';tr.appendChild(etd);inRow++}tbody.appendChild(tr)}
   table.appendChild(tbody);
+  if(_srcFtr&&_srcFtr.textContent.trim()){
+    var tfoot=document.createElement('tfoot');var ftr2=document.createElement('tr');
+    var fcell=_provCell(_srcFtr,'pt-prov-ftr');
+    if(_srcFtr.style.paddingTop)fcell.style.paddingTop=_srcFtr.style.paddingTop;
+    ftr2.appendChild(fcell);tfoot.appendChild(ftr2);table.appendChild(tfoot);
+  }
   thread.appendChild(table);
 }
 
@@ -844,6 +873,9 @@ audio.media{width:100%;display:block;margin:4px 0}
 .phone-viewport .msg-row{margin-bottom:0.267em}
 .phone-viewport .msg-col{max-width:70%;word-break:break-word;overflow-wrap:break-word}
 .phone-viewport .bubble-out,.phone-viewport .bubble-in{padding:0.667em 0.933em;border-radius:1.2em;word-break:break-word;overflow-wrap:break-word}
+/* Message text is ALWAYS left-aligned — the cell's text-align:center (which centres the
+   phone column + the provenance) must never cascade into the bubbles. */
+.phone-viewport .bubble-in,.phone-viewport .bubble-out,.phone-viewport .bubble-call,.phone-viewport .msg-text{text-align:left}
 .phone-viewport .sender-name{font-size:0.8em;margin:0 0 0.133em 3.2em}
 .phone-viewport .msg-time{font-size:0.667em;opacity:0.7}
 .phone-viewport .msg-text{font-size:inherit}
@@ -874,11 +906,14 @@ audio.media{width:100%;display:block;margin:4px 0}
 @page{size:letter portrait;margin:0.5in 0.45in}
 body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;overflow-x:hidden}
 .print-toolbar{display:none!important}
-/* Provenance header/footer ANCHORED to the page edges via position:fixed — they sit in
-   the @page margin band (which reserves the space) and repeat on every page. */
-.ct-header,.has-toolbar .ct-header{display:flex!important;align-items:center;justify-content:center;position:fixed;top:0;left:0.4in;right:0.4in;height:0.5in;background:#fff;z-index:50}
-.ct-hdr-title{display:block;font-size:11px;font-weight:500;color:#000;text-align:center;width:100%}
-.ct-footer,.has-toolbar .ct-footer{display:flex!important;align-items:center;justify-content:center;position:fixed;bottom:0;left:0.4in;right:0.4in;height:0.5in;background:#fff;font-size:9px;color:#333;text-align:center;word-break:break-all;z-index:50}
+/* Provenance rides in the table's thead/tfoot so Chrome repeats it on every page AND
+   reserves its vertical space (phones can't slide under it). The standalone
+   .ct-header/.ct-footer divs are the editable source only — hidden on paper. */
+.ct-header,.ct-footer,.has-toolbar .ct-header,.has-toolbar .ct-footer{display:none!important}
+.phone-table thead{display:table-header-group}
+.phone-table tfoot{display:table-footer-group}
+.pt-prov{text-align:center;background:#fff;color:#000;font-size:11px;font-weight:500;padding:0.04in 0.1in 0.16in;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.pt-prov-ftr{font-size:9px;color:#333;font-weight:400;word-break:break-all;padding:0.16in 0.1in 0.04in}
 .thread-bezel{display:block!important;max-width:none!important;padding:0;margin:0;box-shadow:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
 .thread{display:block!important;padding:0;margin:0;overflow:visible;max-width:none!important;background:transparent!important;zoom:1!important}
 .phone-table{margin:0 auto;border-collapse:separate;border-spacing:0.2in 0.18in;width:auto}
