@@ -208,7 +208,14 @@ export async function POST(request: NextRequest) {
 <h3 style="margin:0 0 16px;font-size:16px;font-weight:600;color:#fff">Page Setup</h3>
 <div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #333">
 <h4 style="margin:0 0 8px;font-size:13px;color:#aaa;text-transform:uppercase;letter-spacing:1px">Header</h4>
-<label style="display:block;margin-bottom:6px">Text: <input type="text" id="ps-hdr-text" style="width:100%;padding:6px 8px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;font-size:13px;margin-top:2px" value="${escapeHtml(hdrDefault)}"></label>
+<label style="display:block;margin-bottom:6px">Text: <input type="text" id="ps-hdr-text" oninput="_refreshAvatarPreview()" style="width:100%;padding:6px 8px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;font-size:13px;margin-top:2px" value="${escapeHtml(hdrDefault)}"></label>
+<div style="font-size:11px;color:#888;margin:-2px 0 4px">This also names the phone's chat header and selects the matching profile photo (e.g. "Jessica Arsenault" → her photo, "Waylon White" → his).</div>
+<div style="display:flex;align-items:center;gap:10px;margin-top:8px">
+<img id="ps-avatar-preview" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;background:#333;border:1px solid #555;flex-shrink:0">
+<label style="font-size:12px;cursor:pointer;color:#7db4ff;text-decoration:underline">Upload profile photo<input type="file" id="ps-avatar-file" accept="image/*" onchange="_onAvatarFile(this)" style="display:none"></label>
+<button type="button" onclick="_clearAvatar()" style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #555;background:#333;color:#aaa;cursor:pointer">Reset</button>
+</div>
+<div id="ps-avatar-note" style="font-size:11px;color:#888;margin-top:4px"></div>
 <div style="display:flex;gap:12px;margin-top:8px">
 <label style="flex:1">Font size (px): <input type="number" id="ps-hdr-size" min="6" max="96" step="1" value="12" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px"></label>
 <label style="flex:1">Font: <select id="ps-hdr-font" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
@@ -250,10 +257,69 @@ export async function POST(request: NextRequest) {
 </div>
 <script>
 window._chromeTimeStr=${JSON.stringify(chromeTimeStr)};
+// Phone-chat header identity. The chrome PNG has "Jessica Arsenault" + her photo baked in,
+// so that is the default. The chat name FOLLOWS the Page Setup header text (which itself
+// defaults to the source conversation's title); the avatar is matched FROM that name via a
+// small name->photo table below. applyNup draws cover-patch name/photo overlays + swaps the
+// in-chat avatars only when the name/photo differs from the baked-in default.
+window._chromeName='Jessica Arsenault';
 var _serverHtml=null;
 var _curNup=1;
 var _ctxBefore=0;var _ctxAfter=0;
 var _viewSizes={mobile:412,tablet:800,desktop:1040};
+// Name -> profile photo table: each person's avatar, used for the chat-header photo AND the
+// little avatars beside their messages. Matched against the header name. Extend as needed.
+var _AVATAR_DB=[{re:/jessica/i,src:'/phone-chrome/profile.png'},{re:/waylon/i,src:'/phone-chrome/profile-waylon.png'}];
+// User-uploaded photos, saved by name in localStorage so they persist across every export
+// in this browser (key = lowercased name -> downscaled data URL).
+var _AVATAR_KEY='ct_blob_avatars_v1';
+function _norm(n){return (n||'').trim().toLowerCase()}
+function _loadAvatarDB(){try{return JSON.parse(localStorage.getItem(_AVATAR_KEY)||'{}')||{}}catch(e){return {}}}
+function _saveAvatarDB(db){try{localStorage.setItem(_AVATAR_KEY,JSON.stringify(db))}catch(e){alert('Could not save the photo (storage may be full).')}}
+function _hasBuiltinAvatar(name){for(var i=0;i<_AVATAR_DB.length;i++){if(_AVATAR_DB[i].re.test(name||''))return true}return false}
+// Resolve a name to a photo: built-in people first, then a photo uploaded under that name,
+// else the default (the chrome PNG's baked-in Jessica photo).
+function _avatarFor(name){
+  for(var i=0;i<_AVATAR_DB.length;i++){if(_AVATAR_DB[i].re.test(name||''))return _AVATAR_DB[i].src}
+  var db=_loadAvatarDB();var k=_norm(name);if(k&&db[k])return db[k];
+  return '/phone-chrome/profile.png';
+}
+// Page Setup avatar preview + upload (uploaded photos are cropped to a square, downscaled,
+// and stored by name; reused automatically on future exports of any chat with that name).
+function _refreshAvatarPreview(){
+  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  var img=document.getElementById('ps-avatar-preview');if(img)img.src=_avatarFor(nm);
+  var note=document.getElementById('ps-avatar-note');if(!note)return;
+  if(_hasBuiltinAvatar(nm))note.textContent='Using the built-in photo for this name.';
+  else if(_loadAvatarDB()[_norm(nm)])note.textContent='Using your uploaded photo for "'+nm+'" (saved for future exports).';
+  else note.textContent='No photo matches "'+nm+'". Upload one and it will be saved for this name.';
+}
+function _onAvatarFile(input){
+  var f=input.files&&input.files[0];if(!f)return;
+  var rd=new FileReader();
+  rd.onload=function(){
+    var im=new Image();
+    im.onload=function(){
+      var S=256,cv=document.createElement('canvas');cv.width=S;cv.height=S;
+      var ctx=cv.getContext('2d');
+      var s=Math.min(im.width,im.height),sx=(im.width-s)/2,sy=(im.height-s)/2;
+      ctx.drawImage(im,sx,sy,s,s,0,0,S,S);
+      var nm=(_val('ps-hdr-text')||window._chromeName||'');
+      if(!nm){alert('Type the name in the Header text first, then upload.');return}
+      var db=_loadAvatarDB();db[_norm(nm)]=cv.toDataURL('image/jpeg',0.9);_saveAvatarDB(db);
+      window._chromeName=nm;_refreshAvatarPreview();_rebuildLayout();
+    };
+    im.onerror=function(){alert('Could not read that image file.')};
+    im.src=rd.result;
+  };
+  rd.readAsDataURL(f);
+  input.value='';
+}
+function _clearAvatar(){
+  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  var db=_loadAvatarDB();if(db[_norm(nm)]){delete db[_norm(nm)];_saveAvatarDB(db)}
+  _refreshAvatarPreview();_rebuildLayout();
+}
 
 function _isDark(){return document.getElementById('tb-theme').value==='dark'}
 function _getViewW(){var s=document.getElementById('tb-view');return _viewSizes[s?s.value:'mobile']||412}
@@ -420,6 +486,9 @@ function applyNup(n){
   var d=_isDark();
   var innerBg=d?'#000':'#fff';
   var innerColor=d?'#ededed':'#0a0a0a';
+  // Chat-header name (from Page Setup) + its matched avatar (from the name->photo table).
+  var _chromeNm=window._chromeName||'Jessica Arsenault';
+  var _chromeAv=_avatarFor(_chromeNm);
   var pages=_paginate();
   var bezelChTop=bezel?bezel.querySelector(':scope > .phone-chrome-top'):null;
   var bezelChBot=bezel?bezel.querySelector(':scope > .phone-chrome-bottom'):null;
@@ -490,6 +559,11 @@ function applyNup(n){
     var content=document.createElement('div');
     content.style.cssText='position:absolute;top:0;left:0;right:0;bottom:0;z-index:1;overflow:hidden;padding:'+padTop+'px 10px '+padBot+'px;color:'+innerColor+';background:transparent;box-sizing:border-box';
     for(var m=0;m<pages[p].length;m++){content.appendChild(pages[p][m].cloneNode(true))}
+    // Swap the in-chat sender/call avatars to the matched person (the source rows are
+    // restored from _serverHtml each rebuild, so do it here on the clones).
+    if(_chromeAv&&_chromeAv!=='/phone-chrome/profile.png'){
+      content.querySelectorAll('.sender-avatar').forEach(function(im){im.src=_chromeAv});
+    }
     pv.appendChild(content);
     var overlay=document.createElement('div');
     overlay.className='phone-chrome-overlay';
@@ -513,6 +587,23 @@ function applyNup(n){
       clk.textContent=window._chromeTimeStr;
       clk.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.026)+'px;top:'+(phoneH*0.0091)+'px;width:'+(phoneW*0.14)+'px;height:'+(phoneH*0.025)+'px;background:'+(d?'#000':'rgb(242,250,253)')+';display:flex;align-items:center;justify-content:flex-start;white-space:nowrap;overflow:visible;padding-left:'+(phoneW*0.009)+'px;font-family:Roboto,Arial,sans-serif;font-weight:700;font-size:'+(phoneH*0.0163)+'px;line-height:1;color:'+(d?'#ededed':'#45484a')+';-webkit-print-color-adjust:exact;print-color-adjust:exact';
       pv.appendChild(clk);
+    }
+    // Custom chat name / avatar — drawn over the PNG's baked-in (Jessica) header only when
+    // a different person is chosen, so the default stays pixel-perfect. The header bg is a
+    // flat colour (light rgb(242,250,253) / dark #000) so the name cover-patch is seamless.
+    if(_chromeAv&&_chromeAv!=='/phone-chrome/profile.png'){
+      var avD=phoneW*0.095;
+      var av=document.createElement('img');
+      av.src=_chromeAv;av.setAttribute('alt','');
+      av.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.1954-avD/2)+'px;top:'+(phoneH*0.0752-avD/2)+'px;width:'+avD+'px;height:'+avD+'px;border-radius:50%;object-fit:cover;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+      av.onerror=function(){this.style.display='none'};
+      pv.appendChild(av);
+    }
+    if(_chromeNm&&_chromeNm!=='Jessica Arsenault'){
+      var nm=document.createElement('div');
+      nm.textContent=_chromeNm;
+      nm.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.252)+'px;top:'+(phoneH*0.0521)+'px;width:'+(phoneW*0.613)+'px;height:'+(phoneH*0.047)+'px;background:'+(d?'#000':'rgb(242,250,253)')+';display:flex;align-items:center;justify-content:flex-start;white-space:nowrap;overflow:hidden;padding-left:'+(phoneW*0.0193)+'px;font-family:Roboto,Arial,sans-serif;font-weight:700;font-size:'+(phoneH*0.0251)+'px;line-height:1;color:'+(d?'#ffffff':'#050505')+';-webkit-print-color-adjust:exact;print-color-adjust:exact';
+      pv.appendChild(nm);
     }
     var td=document.createElement('td');td.className='pt-cell';td.appendChild(pv);
     tr.appendChild(td);inRow++;
@@ -589,6 +680,7 @@ function openPageSetup(){
   var ftrInput=document.getElementById('ps-ftr-text');
   if(hdrInput&&hdr)hdrInput.value=hdr.textContent||'';
   if(ftrInput&&ftr)ftrInput.value=ftr.textContent||'';
+  _refreshAvatarPreview();
   dlg.style.display='flex';
 }
 function closePageSetup(){
@@ -654,6 +746,9 @@ function applyPageSetup(silent){
   var pns=document.getElementById('ps-pagenum-size');
   window._pageNumSize=pns?(parseInt(pns.value,10)||9):9;
   _applyPageNum();
+  // Phone chat-header name follows the header text; its photo is matched from that name
+  // (built-in people first, then any photo uploaded + saved under that name).
+  window._chromeName=(hdrText&&hdrText.value.trim())?hdrText.value.trim():'Jessica Arsenault';
   // The provenance is mirrored into the print table's thead/tfoot, so rebuild to apply.
   _rebuildLayout();
   // silent === true when re-applying saved settings on load; otherwise persist + close.
