@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseFacebookJson, parseFacebookJsonDirectory } from "@/lib/parsers/facebook-json";
-import { parseFacebookHtml } from "@/lib/parsers/facebook-html";
+import { parseFacebookHtml, parseFacebookHtmlDirectory } from "@/lib/parsers/facebook-html";
 import { parseSmsXml, parseCallsXml } from "@/lib/parsers/sms-xml";
 import { parseFacebookTxt } from "@/lib/parsers/facebook-txt";
 import { parseSmsThreadTxt } from "@/lib/parsers/sms-thread-txt";
@@ -12,10 +12,125 @@ import {
   insertMessages,
   deleteSource,
 } from "@/lib/db/queries";
-import { getDb } from "@/lib/db";
+import { getDb, scheduleSave } from "@/lib/db";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
 import path from "path";
+import fs from "fs";
+
+const SEARCH_DIRS = [
+  "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
+  "D:\\tmp\\fb_zips",
+];
+
+function extractMediaFilenames(conv: any): string[] {
+  const filenames: string[] = [];
+  for (const msg of conv.messages || []) {
+    if (msg.media && Array.isArray(msg.media)) {
+      for (const m of msg.media) {
+        const fn = m.filename || (m.localPath || "").split(/[/\\]/).pop();
+        if (fn && !filenames.includes(fn)) {
+          filenames.push(fn);
+          if (filenames.length >= 3) return filenames;
+        }
+      }
+    }
+  }
+  return filenames;
+}
+
+async function setLocalMediaPath(sourceId: string, localPath: string) {
+  const db = await getDb();
+  const result = db.exec(`SELECT metadata FROM sources WHERE id = '${sourceId.replace(/'/g, "''")}'`);
+  const existing = result[0]?.values[0]?.[0] as string | undefined;
+  let meta: Record<string, unknown> = {};
+  try { meta = JSON.parse(existing || "{}"); } catch { /* fresh */ }
+  meta.localMediaPath = localPath;
+  db.run(`UPDATE sources SET metadata = ? WHERE id = ?`, [JSON.stringify(meta), sourceId]);
+  scheduleSave();
+}
+
+function findFoldersRecursive(root: string, folderName: string, maxDepth: number, results: string[] = []): string[] {
+  if (maxDepth <= 0) return results;
+  try {
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return results;
+    const entries = fs.readdirSync(root);
+    for (const entry of entries) {
+      if (entry === folderName) {
+        const full = path.join(root, entry);
+        try { if (fs.statSync(full).isDirectory()) results.push(full); } catch {}
+      }
+    }
+    for (const entry of entries) {
+      try {
+        const full = path.join(root, entry);
+        if (!fs.statSync(full).isDirectory()) continue;
+        if (entry.startsWith('.')) continue;
+        findFoldersRecursive(full, folderName, maxDepth - 1, results);
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+  return results;
+}
+
+async function autoLinkMediaPath(sourceId: string, uploadPath: string, mediaFilenames?: string[]) {
+  const rawPath = uploadPath.replace("upload://", "");
+  const folderName = rawPath.split(/[/\\]/).filter(Boolean).pop() || "";
+  const mediaDirs = ["photos", "videos", "audio", "gifs", "stickers_used"];
+
+  function hasMediaInDir(candidate: string): boolean {
+    if (mediaFilenames && mediaFilenames.length > 0) {
+      for (const fn of mediaFilenames) {
+        for (const sub of mediaDirs) {
+          if (fs.existsSync(path.join(candidate, sub, fn))) return true;
+        }
+        if (fs.existsSync(path.join(candidate, fn))) return true;
+      }
+      return false;
+    }
+    for (const sub of mediaDirs) {
+      try {
+        const subDir = path.join(candidate, sub);
+        if (fs.existsSync(subDir) && fs.statSync(subDir).isDirectory()) return true;
+      } catch { /* skip */ }
+    }
+    return false;
+  }
+
+  if (folderName && folderName !== "." && !folderName.includes(".")) {
+    for (const sd of SEARCH_DIRS) {
+      const candidates = findFoldersRecursive(sd, folderName, 8);
+      for (const found of candidates) {
+        if (hasMediaInDir(found)) {
+          await setLocalMediaPath(sourceId, found);
+          return;
+        }
+      }
+    }
+  }
+
+  if (mediaFilenames && mediaFilenames.length > 0) {
+    const sampleFile = mediaFilenames[0];
+    for (const sd of SEARCH_DIRS) {
+      try {
+        if (!fs.existsSync(sd)) continue;
+        const entries = fs.readdirSync(sd);
+        for (const entry of entries) {
+          const entryPath = path.join(sd, entry);
+          try {
+            if (!fs.statSync(entryPath).isDirectory()) continue;
+            for (const sub of mediaDirs) {
+              if (fs.existsSync(path.join(entryPath, sub, sampleFile))) {
+                await setLocalMediaPath(sourceId, entryPath);
+                return;
+              }
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+  }
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,6 +152,7 @@ export async function POST(request: NextRequest) {
     const errors: Array<{ file: string; error: string }> = [];
 
     const fbJsonGroups = new Map<string, Array<{ name: string; content: string }>>();
+    const fbHtmlGroups = new Map<string, Array<{ name: string; content: string }>>();
 
     for (const file of files) {
       let content: string;
@@ -57,6 +173,18 @@ export async function POST(request: NextRequest) {
           existing.push({ name: file.name, content });
         } else {
           fbJsonGroups.set(dir, [{ name: file.name, content }]);
+        }
+        continue;
+      }
+
+      if (fileType === "facebook-html") {
+        const relativePath = (file as any).webkitRelativePath || file.name;
+        const dir = path.dirname(relativePath);
+        const existing = fbHtmlGroups.get(dir);
+        if (existing) {
+          existing.push({ name: file.name, content });
+        } else {
+          fbHtmlGroups.set(dir, [{ name: file.name, content }]);
         }
         continue;
       }
@@ -86,20 +214,10 @@ export async function POST(request: NextRequest) {
           checksum,
           metadata: JSON.stringify({ uploaded: true, relativePath, provenance: importMetadata }),
         });
+        await autoLinkMediaPath(sourceId, `upload://${relativePath}`);
 
         let conversations;
         switch (fileType) {
-          case "facebook-html": {
-            const conv = parseFacebookHtml(content, file.name, ownerName);
-            if (dirParts.length >= 2) {
-              const parentDir = dirParts[dirParts.length - 2];
-              if (conv.title === "Unknown" || conv.title === file.name || conv.title === "Facebook") {
-                conv.title = parentDir.replace(/_\d{10,}$/, "").replace(/_/g, " ");
-              }
-            }
-            conversations = [conv];
-            break;
-          }
           case "sms-xml":
             conversations = parseSmsXml(content, file.name, ownerName);
             break;
@@ -145,17 +263,62 @@ export async function POST(request: NextRequest) {
         const checksum = crypto.createHash("md5").update(dir).digest("hex");
         const sourceId = uuidv4();
         const dirName = dir.split(/[/\\]/).pop() || dir;
-        const displayDir = dirName.replace(/_\d{10,}$/, "").replace(/_/g, " ");
+        let displayDir = dirName.replace(/_\d{10,}$/, "").replace(/_/g, " ");
+        if (!displayDir || displayDir === ".") {
+          displayDir = combined.title || groupFiles[0]?.name || "JSON Import";
+        }
 
         await insertSource({
           id: sourceId,
-          filename: displayDir || dir,
+          filename: displayDir,
           file_path: `upload://${dir}`,
           file_type: "facebook-json",
           file_size: groupFiles.reduce((sum, f) => sum + f.content.length, 0),
           checksum,
           metadata: JSON.stringify({ uploaded: true, fileCount: groupFiles.length, provenance: importMetadata }),
         });
+        const mediaFilenames = extractMediaFilenames(combined);
+        await autoLinkMediaPath(sourceId, `upload://${dir}`, mediaFilenames);
+
+        if (combined.messages.length > 0) {
+          const result = await importConversation(combined, sourceId, ownerName);
+          conversationsImported += result.conversations;
+          messagesImported += result.messages;
+        } else {
+          await deleteSource(sourceId);
+          skippedEmpty++;
+          emptyFiles.push(displayDir || dir);
+        }
+
+        filesProcessed += groupFiles.length;
+      } catch (e: any) {
+        errors.push({ file: dir, error: e.message });
+      }
+    }
+
+    // Process grouped Facebook HTML files (combine message_1.html..N into one conversation)
+    for (const [dir, groupFiles] of fbHtmlGroups) {
+      try {
+        const combined = parseFacebookHtmlDirectory(groupFiles, dir, ownerName);
+        const checksum = crypto.createHash("md5").update(dir + groupFiles.length).digest("hex");
+        const sourceId = uuidv4();
+        const dirName = dir.split(/[/\\]/).pop() || dir;
+        let displayDir = dirName.replace(/_\d{10,}$/, "").replace(/_/g, " ");
+        if (!displayDir || displayDir === ".") {
+          displayDir = combined.title || groupFiles[0]?.name || "HTML Import";
+        }
+
+        await insertSource({
+          id: sourceId,
+          filename: displayDir,
+          file_path: `upload://${dir}`,
+          file_type: "facebook-html",
+          file_size: groupFiles.reduce((sum, f) => sum + f.content.length, 0),
+          checksum,
+          metadata: JSON.stringify({ uploaded: true, fileCount: groupFiles.length, provenance: importMetadata }),
+        });
+        const htmlMediaFilenames = extractMediaFilenames(combined);
+        await autoLinkMediaPath(sourceId, `upload://${dir}`, htmlMediaFilenames);
 
         if (combined.messages.length > 0) {
           const result = await importConversation(combined, sourceId, ownerName);

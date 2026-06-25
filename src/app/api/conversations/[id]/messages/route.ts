@@ -26,7 +26,8 @@ export async function GET(
       const aRes = db.exec(`SELECT timestamp FROM messages WHERE id = '${safeAnchor}' AND conversation_id = '${safeId}'`);
       const aTs = aRes[0]?.values[0]?.[0] as string | undefined;
       if (aTs) {
-        const win = Math.min(Math.max(limit, 50), 300);
+        const beforeWin = 20;
+        const afterWin = Math.min(Math.max(limit, 50), 300);
         const toObjs = (res: any): any[] => {
           if (!res || !res[0]) return [];
           const { columns, values } = res[0];
@@ -37,19 +38,19 @@ export async function GET(
         const beforeRes = db.exec(`
           SELECT m.*, p.display_name as sender_name FROM messages m
           LEFT JOIN participants p ON m.sender_id = p.id
-          WHERE m.conversation_id = '${safeId}' AND m.timestamp <= '${aTs}'
-          ORDER BY m.timestamp DESC LIMIT ${win}`);
+          WHERE m.conversation_id = '${safeId}' AND m.timestamp < '${aTs}'
+          ORDER BY m.timestamp DESC LIMIT ${beforeWin}`);
         const afterRes = db.exec(`
           SELECT m.*, p.display_name as sender_name FROM messages m
           LEFT JOIN participants p ON m.sender_id = p.id
-          WHERE m.conversation_id = '${safeId}' AND m.timestamp > '${aTs}'
-          ORDER BY m.timestamp ASC LIMIT ${win}`);
+          WHERE m.conversation_id = '${safeId}' AND m.timestamp >= '${aTs}'
+          ORDER BY m.timestamp ASC LIMIT ${afterWin}`);
         const before = toObjs(beforeRes).reverse();
         const after = toObjs(afterRes);
         const rows = [...before, ...after];
         const totalRes = db.exec(`SELECT COUNT(*) FROM messages WHERE conversation_id = '${safeId}'`);
         const total = (totalRes[0]?.values[0]?.[0] as number) || 0;
-        const hasMore = after.length >= win;
+        const hasMore = after.length >= afterWin;
         return NextResponse.json({
           messages: rows,
           total,
@@ -125,11 +126,15 @@ export async function GET(
     const totalResult = db.exec(totalQuery);
     const total = (totalResult[0]?.values[0]?.[0] as number) || 0;
 
+    // For backward mode, rows are reversed (oldest first after reverse).
+    // The cursor must be the oldest timestamp (rows[0]) so the next page
+    // fetches messages OLDER than the oldest we already have.
+    const cursorRow = direction === "backward" ? rows[0] : rows[rows.length - 1];
     return NextResponse.json({
       messages: rows,
       total,
       hasMore,
-      nextCursor: hasMore && rows.length > 0 ? rows[rows.length - 1].timestamp : null,
+      nextCursor: hasMore && cursorRow ? cursorRow.timestamp : null,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

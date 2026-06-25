@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { ViewModeToggle, useViewMode, useThemeMode } from "@/app/conversations/[id]/MessageThread";
 
 interface BookmarkRow {
   id: string;
@@ -48,7 +49,7 @@ function ExportPageInner() {
   const [conversations, setConversations] = useState<ConversationRow[]>([]);
   const [selectedConvs, setSelectedConvs] = useState<Set<string>>(preselectedConv ? new Set([preselectedConv]) : new Set());
   const [selectedBookmarks, setSelectedBookmarks] = useState<Set<string>>(new Set());
-  const [exportFormat, setExportFormat] = useState<"pdf" | "html" | "txt" | "csv">("html");
+  const [exportFormat, setExportFormat] = useState<"html" | "html-zip" | "mhtml" | "csv" | "txt">("html");
   const [includeProvenance, setIncludeProvenance] = useState(true);
   const [includeTimestamps, setIncludeTimestamps] = useState(true);
   const [includeMedia, setIncludeMedia] = useState(true);
@@ -57,6 +58,8 @@ function ExportPageInner() {
   const [batesPrefix, setBatesPrefix] = useState("CT");
   const [batesStart, setBatesStart] = useState(1);
   const [exporting, setExporting] = useState(false);
+  const [viewMode, setViewMode] = useViewMode();
+  const [themeMode, setThemeMode] = useThemeMode();
 
   useEffect(() => {
     fetch("/api/bookmarks").then((r) => r.json()).then((d) => setBookmarks(d.bookmarks || [])).catch(() => {});
@@ -90,9 +93,12 @@ function ExportPageInner() {
   async function handleExport() {
     setExporting(true);
     try {
+      const apiFormat = exportFormat === "html-zip" ? "html" : exportFormat === "mhtml" ? "html" : exportFormat;
       const body = buildScopeBody({
-        format: exportFormat,
-        embedMedia: embedMedia && exportFormat === "html",
+        format: apiFormat,
+        subFormat: exportFormat,
+        embedMedia: exportFormat === "html" || exportFormat === "mhtml",
+        bundleMedia: exportFormat === "html-zip",
       });
 
       const res = await fetch("/api/export", {
@@ -111,10 +117,10 @@ function ExportPageInner() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      // The server returns a ZIP when media is bundled; trust the blob's MIME type.
       const isZip = blob.type.includes("zip");
-      const ext = isZip ? "zip" : exportFormat === "pdf" ? "pdf" : exportFormat === "csv" ? "csv" : exportFormat === "txt" ? "txt" : "html";
-      a.download = `CourtThread_Export_${new Date().toISOString().slice(0, 10)}.${ext}`;
+      const ext = isZip ? "zip" : exportFormat === "csv" ? "csv" : exportFormat === "txt" ? "txt" : exportFormat === "mhtml" ? "mhtml" : "html";
+      const cd = res.headers.get("content-disposition");
+      a.download = cd?.match(/filename="([^"]+)"/)?.[1] || `CourtThread_Export_${new Date().toISOString().slice(0, 10)}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -134,6 +140,8 @@ function ExportPageInner() {
       includeBatesNumbers,
       batesPrefix,
       batesStart,
+      viewMode,
+      theme: themeMode,
       ...extra,
     };
     if (tab === "bookmarks") {
@@ -166,17 +174,15 @@ function ExportPageInner() {
         return;
       }
       let html = await res.text();
-      // Base tag so "/api/media" URLs resolve in the new window; auto-open print after load.
-      const inject = `<base href="${location.origin}/"><script>window.addEventListener('load',function(){setTimeout(function(){window.print();},400);});<\/script>`;
+      const inject = `<base href="${location.origin}/">`;
       html = html.replace(/<head>/i, `<head>${inject}`);
-      const w = window.open("", "_blank");
+      const blob = new Blob([html], { type: "text/html" });
+      const blobUrl = URL.createObjectURL(blob);
+      const w = window.open(blobUrl, "_blank");
       if (!w) {
         alert("Pop-up blocked — allow pop-ups for this site to print / save as PDF.");
         return;
       }
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
     } catch (e: any) {
       alert(e.message);
     } finally {
@@ -333,27 +339,30 @@ function ExportPageInner() {
         <div className="space-y-4">
           <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
             <h3 className="text-sm font-semibold mb-3">Export Format</h3>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
               {([
-                { key: "html" as const, label: "HTML", desc: "Formatted, printable" },
+                { key: "html" as const, label: "HTML (standalone, media embedded)", desc: "Single file with images/video as data URIs" },
+                { key: "html-zip" as const, label: "HTML + Media folder (ZIP)", desc: "HTML exhibit + media/ folder with original files" },
+                { key: "mhtml" as const, label: "MHTML (single file)", desc: "Web archive format — one file, media included" },
+                { key: "csv" as const, label: "CSV (spreadsheet)", desc: "Importable into Excel, Google Sheets, etc." },
                 { key: "txt" as const, label: "Plain Text", desc: "Simple text file" },
-                { key: "csv" as const, label: "CSV", desc: "Spreadsheet format" },
-                { key: "pdf" as const, label: "PDF", desc: "Coming soon", disabled: true },
               ]).map((f) => (
-                <button key={f.key} onClick={() => !f.disabled && setExportFormat(f.key)}
-                  disabled={f.disabled}
-                  className={`text-left px-3 py-2 rounded border text-sm transition ${
+                <button key={f.key} onClick={() => setExportFormat(f.key)}
+                  className={`w-full text-left px-3 py-2 rounded border text-sm transition ${
                     exportFormat === f.key
                       ? "border-[var(--primary)] bg-[var(--primary)]/10"
-                      : f.disabled
-                        ? "border-[var(--border)] opacity-40 cursor-not-allowed"
-                        : "border-[var(--border)] hover:border-[var(--primary)]/50"
+                      : "border-[var(--border)] hover:border-[var(--primary)]/50"
                   }`}>
                   <div className="font-medium text-xs">{f.label}</div>
                   <div className="text-[10px] text-[var(--muted-foreground)]">{f.desc}</div>
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
+            <h3 className="text-sm font-semibold mb-3">Layout</h3>
+            <ViewModeToggle mode={viewMode} onChange={setViewMode} theme={themeMode} onThemeChange={setThemeMode} />
           </div>
 
           <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
@@ -372,23 +381,8 @@ function ExportPageInner() {
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={includeMedia} onChange={(e) => setIncludeMedia(e.target.checked)}
                   className="rounded" />
-                <span className="text-sm">Include media references</span>
+                <span className="text-sm">Include media</span>
               </label>
-              <p className="text-[10px] text-[var(--muted-foreground)] pl-6 -mt-1">
-                Lists attached photo/video/file names inline.
-              </p>
-              {exportFormat === "html" && (
-                <>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={embedMedia} onChange={(e) => setEmbedMedia(e.target.checked)}
-                      className="rounded" />
-                    <span className="text-sm">Bundle actual media files (ZIP)</span>
-                  </label>
-                  <p className="text-[10px] text-[var(--muted-foreground)] pl-6 -mt-1">
-                    HTML only. Downloads a ZIP with the exhibit + a media/ folder of the real photos/videos. Works for folder-imported sources; browser-uploaded sources only have references.
-                  </p>
-                </>
-              )}
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" checked={includeBatesNumbers} onChange={(e) => setIncludeBatesNumbers(e.target.checked)}
                   className="rounded" />
@@ -426,7 +420,7 @@ function ExportPageInner() {
           </button>
 
           <p className="text-[10px] text-[var(--muted-foreground)] text-center">
-            Exported files include &quot;Extracted using CourtThread&trade;&quot; provenance footer.
+            Export footer includes the source file path.
             Print uses your browser&apos;s dialog (choose &quot;Save as PDF&quot; as the destination).
           </p>
         </div>

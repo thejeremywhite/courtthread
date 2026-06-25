@@ -3,8 +3,72 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
-import { MessageThread } from "./MessageThread";
+import { MessageThread, ThreadViewport, ViewModeToggle, useViewMode, useThemeMode, getThemeVars, type ViewMode, type ThemeMode } from "./MessageThread";
 import { DateTimePicker } from "@/components/DateTimePicker";
+
+type ExportFormat = "print" | "html" | "html-zip" | "mhtml" | "html-original" | "csv" | "txt";
+
+function ConvExportDropdown({ onAction, disabled }: { onAction: (format: ExportFormat) => void; disabled: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [goUp, setGoUp] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+  const handleToggle = () => {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      setGoUp(window.innerHeight - rect.bottom < 280);
+    }
+    setOpen(!open);
+  };
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <button onClick={handleToggle} disabled={disabled}
+        className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)]/50 transition disabled:opacity-50">
+        {disabled ? "Exporting..." : "Export"} <span className="text-[10px]">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className={`absolute right-0 ${goUp ? 'bottom-full mb-1' : 'top-full mt-1'} w-56 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-xl z-40 py-1`}>
+          <button onClick={() => { onAction("print"); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition">
+            Print / Save as PDF
+          </button>
+          <div className="border-t border-[var(--border)] my-1" />
+          <p className="px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--muted-foreground)]">Download as</p>
+          <button onClick={() => { onAction("html"); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition">
+            HTML (standalone, media embedded)
+          </button>
+          <button onClick={() => { onAction("html-zip"); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition">
+            HTML + Media folder (ZIP)
+          </button>
+          <button onClick={() => { onAction("mhtml"); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition">
+            MHTML (single file)
+          </button>
+          <button onClick={() => { onAction("html-original"); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition">
+            HTML (original source format)
+          </button>
+          <div className="border-t border-[var(--border)] my-1" />
+          <button onClick={() => { onAction("csv"); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition">
+            CSV (spreadsheet)
+          </button>
+          <button onClick={() => { onAction("txt"); setOpen(false); }}
+            className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition">
+            Plain Text
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface Conversation {
   id: string;
@@ -45,6 +109,10 @@ export default function ConversationPage() {
   const [hasMore, setHasMore] = useState(false);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"forward" | "backward">("forward");
+
+  useEffect(() => {
+    try { const v = localStorage.getItem("courtthread_conv_sort") as "forward" | "backward"; if (v) setSortDirection(v); } catch {}
+  }, []);
   const observerRef = useRef<HTMLDivElement>(null);
   const highlightRef = useRef<HTMLDivElement>(null);
   const [scrolledToHighlight, setScrolledToHighlight] = useState(false);
@@ -125,10 +193,22 @@ export default function ConversationPage() {
     if (!scrolledToHighlight && highlightMessageId && messages.length > 0) {
       const found = messages.find(m => m.id === highlightMessageId);
       if (found) {
-        setTimeout(() => {
-          highlightRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-          setScrolledToHighlight(true);
-        }, 100);
+        setScrolledToHighlight(true);
+        const tryScroll = (attempts: number) => {
+          requestAnimationFrame(() => {
+            if (highlightRef.current) {
+              highlightRef.current.scrollIntoView({ behavior: "instant", block: "center" });
+              setTimeout(() => {
+                if (highlightRef.current) {
+                  highlightRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+                }
+              }, 300);
+            } else if (attempts > 0) {
+              setTimeout(() => tryScroll(attempts - 1), 200);
+            }
+          });
+        };
+        setTimeout(() => tryScroll(15), 50);
       }
     }
   }, [messages, highlightMessageId, scrolledToHighlight]);
@@ -161,12 +241,70 @@ export default function ConversationPage() {
   }
 
   function toggleSort() {
-    setSortDirection(prev => prev === "forward" ? "backward" : "forward");
+    setSortDirection(prev => {
+      const next = prev === "forward" ? "backward" : "forward";
+      try { localStorage.setItem("courtthread_conv_sort", next); } catch { /* ignore */ }
+      return next;
+    });
   }
 
   const filteredMessages = messages;
 
   const bookmarkCount = bookmarkedIds.size;
+  const [viewMode, setViewMode] = useViewMode();
+  const [themeMode, setThemeMode] = useThemeMode();
+
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExportAction(format: ExportFormat) {
+    if (format === "print") {
+      setExporting(true);
+      try {
+        const body: Record<string, unknown> = {
+          type: "conversations", conversationIds: [id], format: "html",
+          inlineMedia: true, embedMedia: false, includeProvenance: true,
+          includeTimestamps: true, includeMedia: true, viewMode, theme: themeMode,
+        };
+        if (filterSender) body.sender = filterSender;
+        if (filterDateFrom) body.dateFrom = filterDateFrom;
+        if (filterDateTo) body.dateTo = filterDateTo;
+        const res = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        if (!res.ok) { alert((await res.json().catch(() => ({}))).error || "Export failed"); return; }
+        let html = await res.text();
+        html = html.replace(/<head>/i, `<head><base href="${location.origin}/">`);
+        const w = window.open(URL.createObjectURL(new Blob([html], { type: "text/html" })), "_blank");
+        if (!w) alert("Pop-up blocked — allow pop-ups to print.");
+      } catch (e: any) { alert(e.message); }
+      finally { setExporting(false); }
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const apiFormat = format === "html-zip" ? "html" : format === "mhtml" ? "html" : format === "html-original" ? "html" : format;
+      const body: Record<string, unknown> = {
+        type: "conversations", conversationIds: [id], format: apiFormat,
+        subFormat: format, includeProvenance: true, includeTimestamps: true, includeMedia: true,
+        viewMode, theme: themeMode,
+        embedMedia: format === "html" || format === "mhtml",
+        bundleMedia: format === "html-zip",
+      };
+      if (filterSender) body.sender = filterSender;
+      if (filterDateFrom) body.dateFrom = filterDateFrom;
+      if (filterDateTo) body.dateTo = filterDateTo;
+      const res = await fetch("/api/export", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (!res.ok) { alert((await res.json().catch(() => ({}))).error || "Export failed"); return; }
+      const blob = await res.blob();
+      const ext = format === "csv" ? "csv" : format === "txt" ? "txt" : format === "html-zip" ? "zip" : format === "mhtml" ? "mhtml" : "html";
+      const cd = res.headers.get("content-disposition");
+      let fileName = cd?.match(/filename="([^"]+)"/)?.[1] || `${(conversation?.title || "Messages").replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_")}.${ext}`;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = fileName;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e: any) { alert(e.message); }
+    finally { setExporting(false); }
+  }
 
   if (loading) {
     return (
@@ -180,9 +318,9 @@ export default function ConversationPage() {
     <div>
       {/* Header */}
       <div className="flex items-center gap-3 mb-4">
-        <Link href="/conversations" className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition">
+        <button onClick={() => { if (window.history.length <= 1) { window.close(); } else { router.back(); } }} className="text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition">
           &larr; Back
-        </Link>
+        </button>
         <div className="flex-1 min-w-0">
           <h1 className="text-2xl font-bold truncate">{conversation?.title || "Untitled"}</h1>
           <p className="text-sm text-[var(--muted-foreground)]">
@@ -192,6 +330,7 @@ export default function ConversationPage() {
             )}
           </p>
         </div>
+        <ViewModeToggle mode={viewMode} onChange={setViewMode} theme={themeMode} onThemeChange={setThemeMode} />
         <button
           onClick={toggleSort}
           className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)]/50 transition"
@@ -213,10 +352,10 @@ export default function ConversationPage() {
         >
           {filterSender || filterDateFrom || filterDateTo ? "Filtered" : "Filter"}
         </button>
-        <Link href={`/export?conversationId=${id}${filterSender ? `&sender=${encodeURIComponent(filterSender)}` : ""}${filterDateFrom ? `&dateFrom=${encodeURIComponent(filterDateFrom)}` : ""}${filterDateTo ? `&dateTo=${encodeURIComponent(filterDateTo)}` : ""}`}
-          className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)]/50 transition">
-          Export{filterSender || filterDateFrom || filterDateTo ? ` (${totalMessages.toLocaleString()} filtered)` : ""}
-        </Link>
+        <ConvExportDropdown
+          onAction={handleExportAction}
+          disabled={exporting}
+        />
       </div>
 
       {/* Filter bar */}
@@ -254,16 +393,20 @@ export default function ConversationPage() {
         </div>
       )}
 
-      <MessageThread
-        messages={filteredMessages}
-        platform={conversation?.platform || "facebook"}
-        sourceId={conversation?.source_id || ""}
-        bookmarkedIds={bookmarkedIds}
-        onToggleBookmark={handleToggleBookmark}
-        highlightText={highlightTerm}
-        highlightMessageId={highlightMessageId}
-        highlightRef={highlightRef}
-      />
+      <ThreadViewport theme={themeMode} viewMode={viewMode}>
+        <MessageThread
+          messages={filteredMessages}
+          platform={conversation?.platform || "facebook"}
+          sourceId={conversation?.source_id || ""}
+          bookmarkedIds={bookmarkedIds}
+          onToggleBookmark={handleToggleBookmark}
+          highlightText={highlightTerm}
+          highlightMessageId={highlightMessageId}
+          highlightRef={highlightRef}
+          className="p-4"
+          viewMode={viewMode}
+        />
+      </ThreadViewport>
 
       <div ref={observerRef} className="h-10 flex items-center justify-center mt-2">
         {loadingMore && <span className="text-sm text-[var(--muted-foreground)]">Loading more messages...</span>}

@@ -43,6 +43,10 @@ export default function ConversationsPage() {
   const [platformFilter, setPlatformFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+
+  useEffect(() => {
+    try { const v = localStorage.getItem("courtthread_convlist_sort") as "newest" | "oldest"; if (v) setSortOrder(v); } catch {}
+  }, []);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [showDateFilter, setShowDateFilter] = useState(false);
@@ -138,7 +142,7 @@ export default function ConversationsPage() {
           <option value="">All sources</option>
           {sources.map(s => <option key={s.id} value={s.id}>{cleanSourceName(s.filename)}</option>)}
         </select>
-        <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as "newest" | "oldest")}
+        <select value={sortOrder} onChange={(e) => { const v = e.target.value as "newest" | "oldest"; setSortOrder(v); try { localStorage.setItem("courtthread_convlist_sort", v); } catch {} }}
           className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm">
           <option value="newest">Newest first</option>
           <option value="oldest">Oldest first</option>

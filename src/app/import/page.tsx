@@ -20,6 +20,7 @@ interface SourceRow {
   imported_at: string;
   conversation_count: number;
   message_count: number;
+  metadata: string;
 }
 
 interface CaseRow {
@@ -61,7 +62,7 @@ export default function ImportPage() {
   const [sourceSort, setSourceSort] = useState<"recent" | "messages" | "name">("recent");
   const [hideEmptySources, setHideEmptySources] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const [tab, setTab] = useState<"browse" | "path" | "quick">("browse");
+  const [tab, setTab] = useState<"browse" | "quick">("browse");
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
 
   const [cases, setCases] = useState<CaseRow[]>([]);
@@ -73,6 +74,13 @@ export default function ImportPage() {
   const [newCaseFileNumber, setNewCaseFileNumber] = useState("");
   const [showNewSection, setShowNewSection] = useState(false);
   const [newSectionName, setNewSectionName] = useState("");
+
+  const [linkingSourceId, setLinkingSourceId] = useState<string | null>(null);
+  const [linkMediaPath, setLinkMediaPath] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
+  const [detailSourceId, setDetailSourceId] = useState<string | null>(null);
+  const [editingMeta, setEditingMeta] = useState<Record<string, string> | null>(null);
+  const [savingMeta, setSavingMeta] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dirInputRef = useRef<HTMLInputElement>(null);
@@ -212,6 +220,78 @@ export default function ImportPage() {
     }
   }
 
+  async function handleLinkMedia(sourceId: string) {
+    if (!linkMediaPath.trim()) return;
+    setLinkError(null);
+    try {
+      const res = await fetch(`/api/sources/${sourceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ localMediaPath: linkMediaPath.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setLinkingSourceId(null);
+      setLinkMediaPath("");
+      loadSources();
+    } catch (e: any) {
+      setLinkError(e.message);
+    }
+  }
+
+  function openDetails(src: SourceRow) {
+    let meta: Record<string, any> = {};
+    try { meta = JSON.parse(src.metadata || "{}"); } catch {}
+    const prov = meta.provenance || {};
+    setDetailSourceId(src.id);
+    setEditingMeta({
+      platforms: prov.platforms ? (Array.isArray(prov.platforms) ? prov.platforms.join(", ") : String(prov.platforms)) : "",
+      sourceDescription: prov.sourceDescription || "",
+      dateObtained: prov.dateObtained || "",
+      wasModified: prov.wasModified || "unknown",
+      modificationNotes: prov.modificationNotes || "",
+      exportMethods: prov.exportMethods ? (Array.isArray(prov.exportMethods) ? prov.exportMethods.join(", ") : String(prov.exportMethods)) : "",
+      notes: prov.notes || "",
+      localMediaPath: meta.localMediaPath || "",
+    });
+  }
+
+  async function handleSaveMeta() {
+    if (!detailSourceId || !editingMeta) return;
+    setSavingMeta(true);
+    try {
+      const src = sources.find(s => s.id === detailSourceId);
+      let existing: Record<string, any> = {};
+      try { existing = JSON.parse(src?.metadata || "{}"); } catch {}
+      const existingProv = existing.provenance || {};
+      const updated = {
+        ...existing,
+        provenance: {
+          ...existingProv,
+          platforms: editingMeta.platforms ? editingMeta.platforms.split(",").map(s => s.trim()).filter(Boolean) : existingProv.platforms,
+          sourceDescription: editingMeta.sourceDescription,
+          dateObtained: editingMeta.dateObtained,
+          wasModified: editingMeta.wasModified,
+          modificationNotes: editingMeta.modificationNotes,
+          exportMethods: editingMeta.exportMethods ? editingMeta.exportMethods.split(",").map(s => s.trim()).filter(Boolean) : existingProv.exportMethods,
+          notes: editingMeta.notes,
+        },
+        localMediaPath: editingMeta.localMediaPath || existing.localMediaPath,
+      };
+      const res = await fetch(`/api/sources/${detailSourceId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ metadata: updated }),
+      });
+      if (res.ok) {
+        loadSources();
+        setDetailSourceId(null);
+        setEditingMeta(null);
+      }
+    } catch { /* ignore */ }
+    setSavingMeta(false);
+  }
+
   async function handleDeleteSource(sourceId: string, filename: string) {
     if (!confirm(`Delete "${filename}" and all its messages?`)) return;
     try {
@@ -332,9 +412,8 @@ export default function ImportPage() {
       {/* Tab switcher */}
       <div className="flex rounded-lg border border-[var(--border)] overflow-hidden text-sm">
         {([
-          { key: "browse" as const, label: "Browse Files" },
-          { key: "path" as const, label: "Enter Path" },
-          { key: "quick" as const, label: "Quick Import" },
+          { key: "browse" as const, label: "Import" },
+          { key: "quick" as const, label: "Import History" },
         ]).map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
             className={`flex-1 px-4 py-2 transition ${tab === t.key ? "bg-[var(--primary)] text-white" : "hover:bg-[var(--secondary)]"}`}>
@@ -343,49 +422,44 @@ export default function ImportPage() {
         ))}
       </div>
 
-      {/* Browse tab */}
+      {/* Import tab — all controls on one line */}
       {tab === "browse" && (
         <div onDragOver={(e) => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}
-          className={`rounded-lg border-2 border-dashed p-8 text-center transition ${dragOver ? "border-[var(--primary)] bg-[var(--primary)]/5" : "border-[var(--border)] bg-[var(--card)]"}`}>
-          <p className="text-lg font-medium mb-3">{importing ? "Importing..." : "Drop files here"}</p>
-          <div className="flex justify-center gap-3">
-            <input ref={fileInputRef} type="file" multiple accept=".json,.xml,.txt,.html,.htm,.zip" onChange={(e) => e.target.files && handleFileUpload(e.target.files)} className="hidden" />
+          className={`rounded-lg border p-3 transition ${dragOver ? "border-[var(--primary)] bg-[var(--primary)]/5" : "border-[var(--border)] bg-[var(--card)]"}`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <input ref={fileInputRef} type="file" multiple accept=".json,.xml,.txt,.html,.htm,.zip" onChange={(e) => { if (e.target.files) handleFileUpload(e.target.files); e.target.value = ""; }} className="hidden" />
             {/* @ts-expect-error webkitdirectory */}
-            <input ref={dirInputRef} type="file" webkitdirectory="" onChange={(e) => e.target.files && handleFileUpload(e.target.files)} className="hidden" />
+            <input ref={dirInputRef} type="file" webkitdirectory="" onChange={(e) => { if (e.target.files) handleFileUpload(e.target.files); e.target.value = ""; }} className="hidden" />
             <button onClick={() => fileInputRef.current?.click()} disabled={importing}
-              className="px-5 py-2.5 rounded-lg bg-[var(--primary)] text-white font-medium hover:opacity-90 transition disabled:opacity-50">
+              className="px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition disabled:opacity-50">
               Select Files
             </button>
             <button onClick={() => dirInputRef.current?.click()} disabled={importing}
-              className="px-5 py-2.5 rounded-lg border border-[var(--border)] font-medium hover:bg-[var(--secondary)] transition disabled:opacity-50">
+              className="px-4 py-2 rounded-lg border border-[var(--border)] text-sm font-medium hover:bg-[var(--secondary)] transition disabled:opacity-50">
               Select Folder
             </button>
-          </div>
-          <p className="text-xs text-[var(--muted-foreground)] mt-4">Facebook JSON/HTML, SMS XML, TXT, ZIP</p>
-        </div>
-      )}
-
-      {/* Path tab */}
-      {tab === "path" && (
-        <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4">
-          <div className="flex gap-3">
-            <input type="text" value={importPath} onChange={(e) => setImportPath(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handlePathImport()}
-              placeholder="File or directory path..."
-              className="flex-1 px-4 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] font-mono text-sm" />
-            <button onClick={handlePathImport} disabled={!importPath.trim() || importing}
-              className="px-6 py-2 rounded-lg bg-[var(--primary)] text-white font-medium hover:opacity-90 transition disabled:opacity-50">
-              {importing ? "Importing..." : "Import"}
-            </button>
+            <div className="flex-1 min-w-[200px]">
+              <div className="flex gap-2">
+                <input type="text" value={importPath} onChange={(e) => setImportPath(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handlePathImport()}
+                  placeholder="Or enter a file/folder path..."
+                  className="flex-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm font-mono" />
+                <button onClick={handlePathImport} disabled={!importPath.trim() || importing}
+                  className="px-4 py-2 rounded-lg bg-[var(--primary)] text-white text-sm font-medium hover:opacity-90 transition disabled:opacity-50 whitespace-nowrap">
+                  {importing ? "Importing..." : "Import Path"}
+                </button>
+              </div>
+            </div>
+            <span className="text-[10px] text-[var(--muted-foreground)]">Facebook JSON/HTML, SMS XML, TXT, ZIP</span>
           </div>
         </div>
       )}
 
-      {/* Quick tab */}
+      {/* Import History tab */}
       {tab === "quick" && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
           {knownPaths.map((kp) => (
-            <button key={kp.path} onClick={() => { setImportPath(kp.path); setTab("path"); }}
+            <button key={kp.path} onClick={() => { setImportPath(kp.path); setTab("browse"); }}
               className="text-left px-4 py-3 rounded-lg border border-[var(--border)] bg-[var(--card)] hover:border-[var(--primary)] transition">
               <div className="font-medium text-sm">{kp.label}</div>
               <div className="text-[10px] text-[var(--muted-foreground)] mt-1 break-all font-mono">{kp.path}</div>
@@ -518,22 +592,133 @@ export default function ImportPage() {
               {displayed.map((src) => {
                 const plat = platformLabel(src.file_type);
                 const isEmpty = (src.message_count || 0) === 0;
+                const isUpload = src.file_path.startsWith("upload://");
+                let linkedPath: string | null = null;
+                try { linkedPath = JSON.parse(src.metadata || "{}").localMediaPath || null; } catch { /* ignore */ }
+                const isLinking = linkingSourceId === src.id;
                 return (
-                  <div key={src.id} className="group flex items-center justify-between px-4 py-2.5 hover:bg-[var(--secondary)]/30 transition">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] ${plat.cls}`}>{plat.label}</span>
-                        <p className="text-sm font-medium truncate">{cleanSourceName(src.filename)}</p>
-                        {isEmpty && <span className="shrink-0 text-[10px] text-[var(--destructive)]">empty</span>}
+                  <div key={src.id} className="px-4 py-2.5 hover:bg-[var(--secondary)]/30 transition">
+                    <div className="group flex items-center justify-between">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] ${plat.cls}`}>{plat.label}</span>
+                          <p className="text-sm font-medium truncate">{cleanSourceName(src.filename)}</p>
+                          {isEmpty && <span className="shrink-0 text-[10px] text-[var(--destructive)]">empty</span>}
+                        </div>
+                        <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
+                          {src.conversation_count} conv &middot; {(src.message_count || 0).toLocaleString()} msgs &middot; {formatSize(src.file_size)} &middot; {new Date(src.imported_at).toLocaleDateString()}
+                        </p>
+                        {linkedPath && (
+                          <p className="text-[10px] text-[var(--accent)] mt-0.5 truncate font-mono">Media: {linkedPath}</p>
+                        )}
                       </div>
-                      <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
-                        {src.conversation_count} conv &middot; {(src.message_count || 0).toLocaleString()} msgs &middot; {formatSize(src.file_size)} &middot; {new Date(src.imported_at).toLocaleDateString()}
-                      </p>
+                      <div className="flex items-center gap-2 ml-3 shrink-0">
+                        <button onClick={() => detailSourceId === src.id ? setDetailSourceId(null) : openDetails(src)}
+                          className={`text-xs transition hover:underline ${detailSourceId === src.id ? "text-[var(--primary)]" : "text-[var(--muted-foreground)] opacity-0 group-hover:opacity-100"}`}>
+                          {detailSourceId === src.id ? "Hide Details" : "Details"}
+                        </button>
+                        {isUpload && !isEmpty && (
+                          <button onClick={() => { setLinkingSourceId(isLinking ? null : src.id); setLinkMediaPath(linkedPath || ""); setLinkError(null); }}
+                            className="text-xs text-[var(--primary)] opacity-0 group-hover:opacity-100 transition hover:underline">
+                            {linkedPath ? "Change" : "Link Media"}
+                          </button>
+                        )}
+                        <button onClick={() => handleDeleteSource(src.id, src.filename)}
+                          className="text-xs text-[var(--destructive)] opacity-0 group-hover:opacity-100 transition hover:underline">
+                            Delete
+                        </button>
+                      </div>
                     </div>
-                    <button onClick={() => handleDeleteSource(src.id, src.filename)}
-                      className="ml-3 text-xs text-[var(--destructive)] opacity-0 group-hover:opacity-100 transition hover:underline shrink-0">
-                      Delete
-                    </button>
+                    {isLinking && (
+                      <div className="mt-2 flex gap-2 items-center">
+                        <input type="text" value={linkMediaPath} onChange={(e) => setLinkMediaPath(e.target.value)}
+                          onKeyDown={(e) => e.key === "Enter" && handleLinkMedia(src.id)}
+                          placeholder="Paste local folder path (e.g. D:\tmp\fb_zips\jessicaarsenault_...)"
+                          className="flex-1 px-2 py-1 rounded border border-[var(--border)] bg-[var(--background)] text-xs font-mono" />
+                        <button onClick={() => handleLinkMedia(src.id)}
+                          disabled={!linkMediaPath.trim()}
+                          className="px-3 py-1 rounded bg-[var(--primary)] text-white text-xs disabled:opacity-50">
+                          Save
+                        </button>
+                        <button onClick={() => { setLinkingSourceId(null); setLinkError(null); }}
+                          className="px-2 py-1 text-xs text-[var(--muted-foreground)]">Cancel</button>
+                        {linkError && <span className="text-[10px] text-[var(--destructive)]">{linkError}</span>}
+                      </div>
+                    )}
+                    {detailSourceId === src.id && editingMeta && (
+                      <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--background)] p-4 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h4 className="text-sm font-semibold">Import Details</h4>
+                          <div className="flex items-center gap-2">
+                            <button onClick={() => { setDetailSourceId(null); setEditingMeta(null); }}
+                              className="px-3 py-1.5 rounded text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)]">
+                              Cancel
+                            </button>
+                            <button onClick={handleSaveMeta} disabled={savingMeta}
+                              className="px-4 py-1.5 rounded bg-[var(--primary)] text-white text-sm disabled:opacity-50">
+                              {savingMeta ? "Saving..." : "Save"}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Platform(s)</label>
+                            <input type="text" value={editingMeta.platforms} onChange={(e) => setEditingMeta({...editingMeta, platforms: e.target.value})}
+                              placeholder="e.g. Facebook Messenger"
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Date Obtained</label>
+                            <input type="text" value={editingMeta.dateObtained} onChange={(e) => setEditingMeta({...editingMeta, dateObtained: e.target.value})}
+                              placeholder="e.g. 2024-01-15"
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Modified?</label>
+                            <select value={editingMeta.wasModified} onChange={(e) => setEditingMeta({...editingMeta, wasModified: e.target.value})}
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm">
+                              <option value="no">No, original</option>
+                              <option value="yes">Yes, modified</option>
+                              <option value="unknown">Not sure</option>
+                            </select>
+                          </div>
+                          <div className="col-span-2">
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Source Description</label>
+                            <input type="text" value={editingMeta.sourceDescription} onChange={(e) => setEditingMeta({...editingMeta, sourceDescription: e.target.value})}
+                              placeholder="e.g. Downloaded from Facebook account settings on my laptop"
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                          </div>
+                          <div>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">How Obtained</label>
+                            <input type="text" value={editingMeta.exportMethods} onChange={(e) => setEditingMeta({...editingMeta, exportMethods: e.target.value})}
+                              placeholder="e.g. Official platform export"
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                          </div>
+                          {editingMeta.wasModified === "yes" && (
+                            <div className="col-span-3">
+                              <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Modification Notes</label>
+                              <input type="text" value={editingMeta.modificationNotes} onChange={(e) => setEditingMeta({...editingMeta, modificationNotes: e.target.value})}
+                                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                            </div>
+                          )}
+                          <div className="col-span-3">
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Notes</label>
+                            <input type="text" value={editingMeta.notes} onChange={(e) => setEditingMeta({...editingMeta, notes: e.target.value})}
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                          </div>
+                          <div className="col-span-3">
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Local Media Path</label>
+                            <input type="text" value={editingMeta.localMediaPath} onChange={(e) => setEditingMeta({...editingMeta, localMediaPath: e.target.value})}
+                              placeholder="Path to media folder on disk"
+                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm font-mono" />
+                          </div>
+                        </div>
+                        <p className="text-xs text-[var(--muted-foreground)]">
+                          File: <span className="font-mono">{src.file_path}</span>
+                          {src.imported_at && <> &middot; Imported: {new Date(src.imported_at).toLocaleString()}</>}
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               })}

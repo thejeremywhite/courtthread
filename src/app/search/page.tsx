@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { PatternBuilder } from "@/components/search/PatternBuilder";
 import { DateTimePicker } from "@/components/DateTimePicker";
+import { MessageThread, ThreadViewport, ViewModeToggle, useViewMode, useThemeMode, getThemeVars } from "@/app/conversations/[id]/MessageThread";
 import { cleanSourceName } from "@/lib/sourceName";
 
 interface SearchResult {
@@ -11,16 +12,23 @@ interface SearchResult {
   content: string;
   sender_name: string;
   timestamp: string;
+  message_type: string;
   conversation_id: string;
   conversation_title: string;
   platform: string;
   is_incoming: number;
+  source_id: string;
+  metadata: string | null;
   context: Array<{
     id: string;
     content: string | null;
     sender_name: string;
     timestamp: string;
+    message_type: string;
     is_incoming: number;
+    source_id: string;
+    metadata: string | null;
+    platform: string;
   }>;
 }
 
@@ -103,6 +111,128 @@ const PLATFORM_COLORS: Record<string, string> = {
 
 type SearchMode = "contains" | "starts_with" | "ends_with" | "whole_word" | "regex";
 type ContextMode = "time" | "messages";
+type ContextDirection = "both" | "before" | "after";
+type ExportFormat = "print" | "html" | "html-zip" | "mhtml" | "html-original" | "csv" | "txt";
+
+function parseMedia(metadata: string | null): Array<{ type: string; filename: string }> {
+  if (!metadata) return [];
+  try {
+    const obj = JSON.parse(metadata);
+    return (obj?.media || []).filter((m: any) => m && m.filename);
+  } catch { return []; }
+}
+
+function InlineMedia({ metadata, sourceId }: { metadata: string | null; sourceId: string }) {
+  const [errors, setErrors] = useState<Set<string>>(new Set());
+  const items = parseMedia(metadata);
+  if (items.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-2 mt-1">
+      {items.map((m, i) => {
+        const url = `/api/media?sourceId=${encodeURIComponent(sourceId)}&filename=${encodeURIComponent(m.filename)}&type=${encodeURIComponent(m.type)}`;
+        if ((m.type === "image" || m.type === "sticker" || m.type === "gif") && !errors.has(m.filename)) {
+          return (
+            <a key={i} href={url} target="_blank" rel="noopener noreferrer">
+              <img src={url} alt={m.filename}
+                onError={() => setErrors(prev => new Set(prev).add(m.filename))}
+                className="rounded max-w-[200px] max-h-[200px] object-contain border border-[var(--border)] hover:ring-2 hover:ring-[var(--primary)] transition"
+                loading="lazy" />
+            </a>
+          );
+        }
+        if (errors.has(m.filename)) {
+          return <span key={i} className="text-xs px-2 py-1 rounded bg-[var(--secondary)] text-[var(--muted-foreground)]">[Image: {m.filename}]</span>;
+        }
+        if (m.type === "video") {
+          return <video key={i} src={url} className="rounded max-w-[200px] max-h-[200px] border border-[var(--border)]" controls preload="metadata" />;
+        }
+        if (m.type === "audio") {
+          return <audio key={i} controls preload="metadata" className="w-48"><source src={url} /></audio>;
+        }
+        return <span key={i} className="text-xs opacity-70">[{m.type}: {m.filename}]</span>;
+      })}
+    </div>
+  );
+}
+
+function ExportDropdown({ onAction, disabled, label, light }: {
+  onAction: (format: ExportFormat) => void;
+  disabled: boolean;
+  label: string;
+  light?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [goUp, setGoUp] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [open]);
+
+  const handleToggle = () => {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      setGoUp(spaceBelow < 280);
+    }
+    setOpen(!open);
+  };
+
+  const menuBg = light ? "bg-white border-[#dadde1]" : "bg-[#1e1e1e] border-[#333]";
+  const menuItem = light ? "text-[#1c1e21] hover:bg-[#f0f2f5]" : "text-[#e0e0e0] hover:bg-[#333]";
+  const menuDivider = light ? "border-[#dadde1]" : "border-[#333]";
+  const menuLabel = light ? "text-[#65676b]" : "text-[#999]";
+
+  return (
+    <div className="relative inline-block" ref={ref}>
+      <button onClick={handleToggle} disabled={disabled}
+        className="px-3 py-1.5 rounded-lg bg-[var(--primary)] text-white text-xs font-medium hover:opacity-90 transition disabled:opacity-50 flex items-center gap-1">
+        {label} <span className="text-[10px]">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <div className={`absolute right-0 ${goUp ? 'bottom-full mb-1' : 'top-full mt-1'} w-56 rounded-lg border shadow-xl z-40 py-1 ${menuBg}`}>
+          <button onClick={() => { onAction("print"); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-sm transition ${menuItem}`}>
+            Print / Save as PDF
+          </button>
+          <div className={`border-t my-1 ${menuDivider}`} />
+          <p className={`px-3 py-1 text-[10px] uppercase tracking-wider ${menuLabel}`}>Download as</p>
+          <button onClick={() => { onAction("html"); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-sm transition ${menuItem}`}>
+            HTML (standalone, media embedded)
+          </button>
+          <button onClick={() => { onAction("html-zip"); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-sm transition ${menuItem}`}>
+            HTML + Media folder (ZIP)
+          </button>
+          <button onClick={() => { onAction("mhtml"); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-sm transition ${menuItem}`}>
+            MHTML (single file)
+          </button>
+          <button onClick={() => { onAction("html-original"); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-sm transition ${menuItem}`}>
+            HTML (original source format)
+          </button>
+          <div className={`border-t my-1 ${menuDivider}`} />
+          <button onClick={() => { onAction("csv"); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-sm transition ${menuItem}`}>
+            CSV (spreadsheet)
+          </button>
+          <button onClick={() => { onAction("txt"); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-sm transition ${menuItem}`}>
+            Plain Text
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function SearchPageInner() {
   const searchParams = useSearchParams();
@@ -111,12 +241,28 @@ function SearchPageInner() {
   const [query, setQuery] = useState("");
   const [searchMode, setSearchMode] = useState<SearchMode>("contains");
   const [matchCase, setMatchCase] = useState(false);
+  // Initialize to a constant so server and client render identically (no hydration
+  // mismatch). The saved preference is loaded from localStorage AFTER mount.
+  const [highlightMatches, setHighlightMatches] = useState(true);
+  const highlightLoaded = useRef(false);
+  useEffect(() => {
+    const saved = localStorage.getItem("courtthread_highlightMatches");
+    if (saved !== null) setHighlightMatches(saved === "true");
+    highlightLoaded.current = true;
+  }, []);
+  useEffect(() => {
+    // Don't write back until after the initial load, to avoid clobbering the saved value.
+    if (highlightLoaded.current) localStorage.setItem("courtthread_highlightMatches", String(highlightMatches));
+  }, [highlightMatches]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [contextLines, setContextLines] = useState(3);
   const [contextMode, setContextMode] = useState<ContextMode>("time");
+  const [contextDirection, setContextDirection] = useState<ContextDirection>("both");
   const [contextCustom, setContextCustom] = useState(false);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [viewMode, setViewMode] = useViewMode();
+  const [themeMode, setThemeMode] = useThemeMode();
   const [showBuilder, setShowBuilder] = useState(false);
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResult[] | null>(null);
@@ -128,7 +274,15 @@ function SearchPageInner() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
+  const [formattedViewData, setFormattedViewData] = useState<SearchResult[] | null>(null);
   const resultsEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!formattedViewData) return;
+    const handleEsc = (e: KeyboardEvent) => { if (e.key === "Escape") setFormattedViewData(null); };
+    window.addEventListener("keydown", handleEsc);
+    return () => window.removeEventListener("keydown", handleEsc);
+  }, [formattedViewData]);
 
   // Scope state
   const [sources, setSources] = useState<SourceRow[]>([]);
@@ -197,6 +351,7 @@ function SearchPageInner() {
         if (s.dateTo) setDateTo(s.dateTo);
         if (s.contextLines !== undefined) setContextLines(s.contextLines);
         if (s.contextMode) setContextMode(s.contextMode);
+        if (s.contextDirection) setContextDirection(s.contextDirection);
         if (s.sortOrder) setSortOrder(s.sortOrder);
         if (s.selectedSources) setSelectedSources(new Set(s.selectedSources));
         if (s.selectedSenders) setSelectedSenders(new Set(s.selectedSenders));
@@ -408,6 +563,7 @@ function SearchPageInner() {
     setSelectedSources(new Set());
     setConvSearchText("");
     setContextMode("time");
+    setContextDirection("both");
     setContextLines(3);
     setContextCustom(false);
     setSearchMode("contains");
@@ -431,18 +587,21 @@ function SearchPageInner() {
 
   async function handleSearch(searchPage = 1, append = false) {
     const trimmed = query.trim();
-    const hasOtherFilter = !!(dateFrom || dateTo || selectedSenders.size > 0
-      || selectedConversations.size > 0 || selectedParticipants.length > 0
-      || selectedPlatforms.size > 0);
-    // Allow a query-less search if any other filter is set; otherwise need a term.
-    if (!trimmed && !hasOtherFilter) {
-      setError("Enter a search term, or apply a date/sender/conversation filter to browse messages.");
+    const hasScope = selectedSources.size > 0 || selectedConversations.size > 0
+      || selectedParticipants.length > 0 || selectedSenders.size > 0
+      || selectedPlatforms.size > 0 || !!dateFrom || !!dateTo;
+    if (!trimmed && !hasScope) {
+      setError("Enter a search term, or select an import/conversation/person to browse messages.");
       setResults(null);
       return;
     }
-    // An empty source selection means the user deselected every import — nothing to search.
-    if (sources.length > 0 && selectedSources.size === 0) {
-      setError("No imports selected. Choose at least one import (or conversation) to search.");
+    // Block only when NOTHING at all is scoped (imports exist but none chosen, and no
+    // conversation / person / sender / date either). Picking any one of those is enough
+    // scope to browse — an empty search box then acts as a wildcard over that scope.
+    if (sources.length > 0 && selectedSources.size === 0
+        && selectedConversations.size === 0 && selectedParticipants.length === 0
+        && selectedSenders.size === 0 && !dateFrom && !dateTo) {
+      setError("Select at least one import, conversation, or person to browse — an empty search box then shows everything in that scope.");
       setResults(null);
       return;
     }
@@ -450,7 +609,7 @@ function SearchPageInner() {
     // else narrowed). Selecting a specific import, conversation, participant, or sender
     // is enough scope on its own.
     const narrowed =
-      (sources.length > 0 && selectedSources.size < sources.length) ||
+      selectedSources.size > 0 ||
       selectedConversations.size > 0 ||
       selectedParticipants.length > 0 ||
       selectedSenders.size > 0 ||
@@ -491,6 +650,7 @@ function SearchPageInner() {
         dateTo: toInclusiveEnd(dateTo) || undefined,
         contextLines,
         contextMode,
+        contextDirection,
         sortOrder,
         page: searchPage,
         limit: 50,
@@ -522,7 +682,7 @@ function SearchPageInner() {
       try {
         sessionStorage.setItem('courtthread_search', JSON.stringify({
           query, searchMode, matchCase, dateFrom, dateTo,
-          contextLines, contextMode, sortOrder,
+          contextLines, contextMode, contextDirection, sortOrder,
           selectedSources: Array.from(selectedSources),
           selectedSenders: Array.from(selectedSenders),
           senderOptions,
@@ -545,16 +705,27 @@ function SearchPageInner() {
   const autoSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   if (results !== null) hasSearchedRef.current = true;
 
+  // After session restore, suppress auto-re-search for a tick so filter setters
+  // don't each trigger a redundant search that clears the restored results.
+  const suppressAutoSearchRef = useRef(restoredRef.current);
+  useEffect(() => {
+    if (suppressAutoSearchRef.current) {
+      const t = setTimeout(() => { suppressAutoSearchRef.current = false; }, 800);
+      return () => clearTimeout(t);
+    }
+  }, []);
+
   // Re-run the search whenever ANY filter changes after a first search — not just
   // when the query box is non-empty. A query-less filter search is valid too.
   useEffect(() => {
     if (!hasSearchedRef.current) return;
+    if (suppressAutoSearchRef.current) return;
     if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current);
     autoSearchTimerRef.current = setTimeout(() => {
       handleSearch(1);
     }, 400);
     return () => { if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current); };
-  }, [matchCase, dateFrom, dateTo, contextLines, contextMode, sortOrder, searchMode,
+  }, [matchCase, dateFrom, dateTo, contextLines, contextMode, contextDirection, sortOrder, searchMode,
       selectedSources.size, selectedPlatforms.size, selectedParticipants.length,
       selectedConversations.size, selectedSenders.size]);
 
@@ -592,6 +763,25 @@ function SearchPageInner() {
     } catch { /* ignore */ }
   }
 
+  async function toggleResultBookmarkById(messageId: string) {
+    const match = results?.find(r => r.id === messageId || r.context.some(c => c.id === messageId));
+    if (match) {
+      try {
+        const res = await fetch("/api/bookmarks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messageId, conversationId: match.conversation_id }),
+        });
+        const data = await res.json();
+        setBookmarkedIds((prev) => {
+          const next = new Set(prev);
+          if (data.bookmarked) next.add(messageId); else next.delete(messageId);
+          return next;
+        });
+      } catch { /* ignore */ }
+    }
+  }
+
   // Open the full conversation scrolled to this message, with the message and the
   // search term highlighted (same highlight as the result card).
   function showInConversation(result: SearchResult) {
@@ -600,54 +790,114 @@ function SearchPageInner() {
     window.open(`/conversations/${result.conversation_id}?${params}`, "_blank");
   }
 
-  // Export search results (all loaded, or a single one) with their context, and
-  // with the matched term highlighted to match the on-screen result.
-  async function exportResults(single?: SearchResult) {
-    setExporting(true);
+  async function getExportData(single?: SearchResult): Promise<SearchResult[]> {
+    if (single) return [single];
+    if (results && results.length >= total) return results;
+    return (await fetchAllResultsForExport()) || results || [];
+  }
+
+  function buildPayload(toExport: SearchResult[]) {
+    return toExport.map((r) => ({
+      id: r.id,
+      content: r.content,
+      sender_name: r.sender_name,
+      timestamp: r.timestamp,
+      conversation_title: r.conversation_title,
+      platform: r.platform,
+      is_incoming: r.is_incoming,
+      source_id: r.source_id,
+      metadata: r.metadata,
+      context: r.context,
+    }));
+  }
+
+
+  async function handlePrint(single?: SearchResult) {
+    const toExport = await getExportData(single);
+    const payload = buildPayload(toExport);
+    if (payload.length === 0) return;
+
     try {
-      let toExport: SearchResult[];
-      if (single) {
-        toExport = [single];
-      } else if (results && results.length >= total) {
-        toExport = results;
-      } else {
-        // Not all results are loaded — fetch the full set (with context) first.
-        const full = await fetchAllResultsForExport();
-        toExport = full || results || [];
-      }
-      const payload = toExport.map((r) => ({
-        id: r.id,
-        content: r.content,
-        sender_name: r.sender_name,
-        timestamp: r.timestamp,
-        conversation_title: r.conversation_title,
-        platform: r.platform,
-        context: r.context,
-      }));
       const res = await fetch("/api/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type: "searchResults",
           format: "html",
-          query: query.trim(),
+          subFormat: "print",
+          query: highlightMatches ? query.trim() : "",
           matchCase,
           includeTimestamps: true,
           includeProvenance: true,
           includeContext: true,
+          viewMode,
+          theme: themeMode,
+          results: payload,
+        }),
+      });
+      if (!res.ok) { console.error("Export failed:", res.status, await res.text()); alert("Export failed: " + res.status); return; }
+      let html = await res.text();
+      html = html.replace(/<head>/i, `<head><base href="${location.origin}/">`);
+      const blob = new Blob([html], { type: "text/html" });
+      const blobUrl = URL.createObjectURL(blob);
+      const w = window.open(blobUrl, "_blank");
+      if (!w) { alert("Pop-up blocked — allow pop-ups for print preview."); return; }
+    } catch (e: any) { console.error("Print error:", e); alert("Print error: " + (e?.message || e)); }
+  }
+
+  async function openFormattedView(single?: SearchResult) {
+    if (single) {
+      setFormattedViewData([single]);
+      return;
+    }
+    const allResults = await getExportData();
+    setFormattedViewData(allResults);
+  }
+
+  async function handleExportAction(format: ExportFormat, single?: SearchResult) {
+    if (format === "print") {
+      handlePrint(single);
+      return;
+    }
+    setExporting(true);
+    try {
+      const toExport = await getExportData(single);
+      const payload = buildPayload(toExport);
+      const apiFormat = format === "html-zip" ? "html" : format === "mhtml" ? "html" : format === "html-original" ? "html" : format;
+      const res = await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "searchResults",
+          format: apiFormat,
+          subFormat: format,
+          query: highlightMatches ? query.trim() : "",
+          matchCase,
+          includeTimestamps: true,
+          includeProvenance: true,
+          includeContext: true,
+          embedMedia: format === "html" || format === "mhtml",
+          bundleMedia: format === "html-zip",
+          originalSource: format === "html-original",
+          viewMode,
+          theme: themeMode,
           results: payload,
         }),
       });
       if (!res.ok) {
-        const e = await res.json();
+        const e = await res.json().catch(() => ({ error: "Export failed" }));
         setError(e.error || "Export failed");
         return;
       }
       const blob = await res.blob();
+      const ext = format === "csv" ? "csv" : format === "txt" ? "txt" : format === "html-zip" ? "zip" : format === "mhtml" ? "mhtml" : "html";
+      const cd = res.headers.get("content-disposition");
+      const fileName = cd?.match(/filename="([^"]+)"/)?.[1]
+        || `${(single?.conversation_title || results?.[0]?.conversation_title || "Search_Results").replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_")}.${ext}`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `CourtThread_Search_${single ? "result" : "results"}.html`;
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -681,7 +931,7 @@ function SearchPageInner() {
       const body: any = {
         query: effectiveQuery, useRegex: true, matchCase,
         dateFrom: dateFrom || undefined, dateTo: toInclusiveEnd(dateTo) || undefined,
-        contextLines, contextMode, sortOrder, page: 1, limit: 100000,
+        contextLines, contextMode, contextDirection, sortOrder, page: 1, limit: 100000,
       };
       if (selectedSources.size > 0) body.sourceIds = Array.from(selectedSources);
       if (selectedPlatforms.size > 0) body.platforms = Array.from(selectedPlatforms);
@@ -791,6 +1041,16 @@ function SearchPageInner() {
                 : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
             }`}>
             Match case
+          </button>
+
+          <button onClick={() => setHighlightMatches(!highlightMatches)}
+            className={`px-3 py-1 rounded-full text-xs font-medium transition ${
+              highlightMatches
+                ? "bg-amber-500/20 text-amber-400 ring-1 ring-amber-500/50"
+                : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+            }`}
+            title="Highlight search term matches in results, exports, and prints">
+            Highlight
           </button>
 
           {searchMode === "regex" && (
@@ -1072,6 +1332,13 @@ function SearchPageInner() {
                   <option value="time">By time</option>
                   <option value="messages">By messages</option>
                 </select>
+                <select value={contextDirection} onChange={(e) => setContextDirection(e.target.value as ContextDirection)}
+                  className="px-1.5 py-1 rounded border border-[var(--border)] bg-[var(--background)] text-sm"
+                  title="Context direction: before & after, before only, or after only">
+                  <option value="both">± before & after</option>
+                  <option value="before">− before only</option>
+                  <option value="after">+ after only</option>
+                </select>
                 <select
                   value={contextCustom ? "custom" : String(contextLines)}
                   onChange={(e) => {
@@ -1084,13 +1351,13 @@ function SearchPageInner() {
                   }}
                   className="px-1.5 py-1 rounded border border-[var(--border)] bg-[var(--background)] text-sm">
                   <option value="0">None</option>
-                  <option value="1">± 1 {contextMode === "time" ? "min" : "msg"}</option>
-                  <option value="3">± 3 {contextMode === "time" ? "min" : "msgs"}</option>
-                  <option value="5">± 5 {contextMode === "time" ? "min" : "msgs"}</option>
-                  <option value="10">± 10 {contextMode === "time" ? "min" : "msgs"}</option>
-                  <option value="20">± 20 {contextMode === "time" ? "min" : "msgs"}</option>
-                  <option value="30">± 30 {contextMode === "time" ? "min" : "msgs"}</option>
-                  <option value="60">± 60 {contextMode === "time" ? "min" : "msgs"}</option>
+                  <option value="1">{contextDirection === "both" ? "±" : contextDirection === "before" ? "−" : "+"} 1 {contextMode === "time" ? "min" : "msg"}</option>
+                  <option value="3">{contextDirection === "both" ? "±" : contextDirection === "before" ? "−" : "+"} 3 {contextMode === "time" ? "min" : "msgs"}</option>
+                  <option value="5">{contextDirection === "both" ? "±" : contextDirection === "before" ? "−" : "+"} 5 {contextMode === "time" ? "min" : "msgs"}</option>
+                  <option value="10">{contextDirection === "both" ? "±" : contextDirection === "before" ? "−" : "+"} 10 {contextMode === "time" ? "min" : "msgs"}</option>
+                  <option value="20">{contextDirection === "both" ? "±" : contextDirection === "before" ? "−" : "+"} 20 {contextMode === "time" ? "min" : "msgs"}</option>
+                  <option value="30">{contextDirection === "both" ? "±" : contextDirection === "before" ? "−" : "+"} 30 {contextMode === "time" ? "min" : "msgs"}</option>
+                  <option value="60">{contextDirection === "both" ? "±" : contextDirection === "before" ? "−" : "+"} 60 {contextMode === "time" ? "min" : "msgs"}</option>
                   <option value="custom">Custom…</option>
                 </select>
                 {contextCustom && (
@@ -1152,12 +1419,20 @@ function SearchPageInner() {
               )}
             </p>
             <div className="flex items-center gap-3">
+              <ViewModeToggle mode={viewMode} onChange={setViewMode} theme={themeMode} onThemeChange={setThemeMode} />
               {results.length > 0 && (
-                <button onClick={() => exportResults()} disabled={exporting}
-                  className="px-3 py-1.5 rounded-lg bg-[var(--primary)] text-white text-xs font-medium hover:opacity-90 transition disabled:opacity-50"
-                  title="Export all results with context as an HTML exhibit">
-                  {exporting ? "Exporting…" : `Export ${total} result${total !== 1 ? "s" : ""}`}
-                </button>
+                <>
+                  <button onClick={() => openFormattedView()}
+                    className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-xs font-medium hover:bg-[var(--secondary)] transition"
+                    title="View all results in conversation format">
+                    View Formatted
+                  </button>
+                  <ExportDropdown
+                    label={exporting ? "Exporting..." : `Export ${total} result${total !== 1 ? "s" : ""}`}
+                    disabled={exporting}
+                    onAction={(fmt) => handleExportAction(fmt)}
+                  />
+                </>
               )}
               <span className="text-xs text-[var(--muted-foreground)]">
                 {sortOrder === "desc" ? "Newest first" : "Oldest first"}
@@ -1170,7 +1445,7 @@ function SearchPageInner() {
               const isExpanded = expandedResults.has(result.id);
               const platformClass = PLATFORM_COLORS[result.platform] || PLATFORM_COLORS.default;
               return (
-                <div key={result.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)] overflow-hidden">
+                <div key={result.id} className="rounded-lg border border-[var(--border)] bg-[var(--card)]">
                   <div className="px-4 py-2 border-b border-[var(--border)] bg-[var(--secondary)]/30 flex items-center justify-between">
                     <div className="flex items-center gap-2 text-sm">
                       <span className={`px-2 py-0.5 rounded text-xs ${platformClass}`}>{result.platform}</span>
@@ -1188,6 +1463,10 @@ function SearchPageInner() {
                           {isExpanded ? "Hide context" : result.context.length > 1 ? `Show context (${result.context.length} msgs)` : "Show context"}
                         </button>
                       )}
+                      <button type="button" onClick={() => openFormattedView(result)}
+                        className="text-xs text-[var(--primary)] hover:underline" title="View in conversation format with media">
+                        View formatted
+                      </button>
                       <button type="button" onClick={() => showInConversation(result)}
                         className="text-xs text-[var(--primary)] hover:underline" title="Open the full conversation at this message in a new tab">
                         Show in conversation
@@ -1198,35 +1477,27 @@ function SearchPageInner() {
                         <span className="text-base leading-none">{bookmarkedIds.has(result.id) ? "★" : "☆"}</span>
                         {bookmarkedIds.has(result.id) ? "Bookmarked" : "Bookmark"}
                       </button>
-                      <button type="button" onClick={() => exportResults(result)} disabled={exporting}
-                        className="text-xs text-[var(--primary)] hover:underline disabled:opacity-50"
-                        title="Export this result with its context">
-                        Export
-                      </button>
+                      <ExportDropdown
+                        label="Export"
+                        disabled={exporting}
+                        onAction={(fmt) => handleExportAction(fmt, result)}
+                      />
                     </div>
                   </div>
 
-                  {isExpanded && result.context.length > 1 ? (
-                    <div className="p-3 space-y-1">
-                      {result.context.map((ctx) => {
-                        const isMatch = ctx.id === result.id;
-                        return (
-                          <div key={ctx.id} className={`px-3 py-1.5 rounded text-sm ${isMatch ? "bg-amber-400/10 border border-amber-400/30" : "opacity-70"}`}>
-                            <span className="font-medium text-xs text-[var(--muted-foreground)]">{ctx.sender_name}</span>
-                            <span className="text-xs text-[var(--muted-foreground)] ml-2">{formatTime(ctx.timestamp)}</span>
-                            <p className="mt-0.5">
-                              {isMatch && ctx.content ? highlightMatch(ctx.content, query, matchCase) : ctx.content || "[media]"}
-                            </p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="p-4">
-                      <p className="text-xs text-[var(--muted-foreground)] mb-1">{result.sender_name}</p>
-                      <p className="text-sm">{highlightMatch(result.content, query, matchCase)}</p>
-                    </div>
-                  )}
+                  <ThreadViewport theme={themeMode} viewMode={viewMode} className="my-3">
+                    <MessageThread
+                      messages={isExpanded && result.context.length > 1 ? result.context : [result]}
+                      platform={result.platform || "facebook"}
+                      sourceId={result.source_id || ""}
+                      bookmarkedIds={bookmarkedIds}
+                      onToggleBookmark={toggleResultBookmarkById}
+                      highlightText={highlightMatches ? query : undefined}
+                      highlightMessageId={isExpanded && result.context.length > 1 ? result.id : undefined}
+                      className="p-4"
+                      viewMode={viewMode}
+                    />
+                  </ThreadViewport>
                 </div>
               );
             })}
@@ -1241,11 +1512,93 @@ function SearchPageInner() {
         </div>
       )}
 
+      {/* Formatted View Modal */}
+      {formattedViewData && (() => {
+        const allMsgs: Array<{ id: string; content: string | null; sender_name: string; timestamp: string; message_type: string; is_incoming: number; source_id: string; metadata: string | null; platform: string }> = [];
+        const matchIds = new Set<string>();
+        const seen = new Set<string>();
+        for (const r of formattedViewData) {
+          matchIds.add(r.id);
+          const ctxList = r.context.length > 1 ? r.context : [{
+            id: r.id, content: r.content, sender_name: r.sender_name, timestamp: r.timestamp,
+            is_incoming: r.is_incoming, source_id: r.source_id, metadata: r.metadata, platform: r.platform,
+          }];
+          for (const c of ctxList) {
+            if (seen.has(c.id)) continue;
+            seen.add(c.id);
+            allMsgs.push({ ...c, message_type: "text" });
+          }
+        }
+        allMsgs.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        const convTitle = formattedViewData[0]?.conversation_title || "Messages";
+        const plat = formattedViewData[0]?.platform || "facebook";
+        const firstSourceId = formattedViewData[0]?.source_id || "";
+        const highlightMsgId = formattedViewData.length === 1 ? formattedViewData[0].id : undefined;
+
+        const sysDark = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+
+        const pageBg = sysDark ? '#1a1a1a' : '#f0f0f0';
+        const chromeText = sysDark ? '#ededed' : '#0a0a0a';
+        const chromeBg = sysDark ? '#141414' : '#e5e5e5';
+        const chromeBorder = sysDark ? '#27272a' : '#d1d5db';
+        const chromeMuted = sysDark ? '#a1a1aa' : '#6b7280';
+
+        return (
+          <div className="fixed inset-0 z-50 flex flex-col"
+            style={{ background: pageBg, color: chromeText }}>
+            <div className="border-b px-4 py-3 flex items-center justify-between shrink-0"
+              style={{ background: chromeBg, borderColor: chromeBorder, color: chromeText }}>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setFormattedViewData(null)}
+                  className="hover:opacity-80 text-sm"
+                  style={{ color: chromeMuted }}>
+                  &larr; Back
+                </button>
+                <h2 className="font-semibold text-sm" style={{ color: chromeText }}>
+                  {formattedViewData.length === 1
+                    ? convTitle
+                    : `${formattedViewData.length} Search Results`}
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                <ViewModeToggle mode={viewMode} onChange={setViewMode} theme={themeMode} onThemeChange={setThemeMode} />
+                <button onClick={() => handlePrint(formattedViewData.length === 1 ? formattedViewData[0] : undefined)}
+                  className="px-3 py-1.5 rounded-lg border text-xs font-medium hover:opacity-80 transition"
+                  style={{ borderColor: chromeBorder, color: chromeText }}>
+                  Print
+                </button>
+                <ExportDropdown
+                  label="Export"
+                  disabled={exporting}
+                  onAction={(fmt) => handleExportAction(fmt, formattedViewData.length === 1 ? formattedViewData[0] : undefined)}
+                />
+              </div>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6"
+              style={{ backgroundColor: pageBg }}>
+              <ThreadViewport theme={themeMode} viewMode={viewMode}>
+                <MessageThread
+                  messages={allMsgs}
+                  platform={plat}
+                  sourceId={firstSourceId}
+                  bookmarkedIds={bookmarkedIds}
+                  onToggleBookmark={toggleResultBookmarkById}
+                  highlightText={highlightMatches ? query : undefined}
+                  highlightMessageId={highlightMsgId}
+                  className="p-4"
+                  viewMode={viewMode}
+                />
+              </ThreadViewport>
+            </div>
+          </div>
+        );
+      })()}
+
       {results === null && !error && (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-8 text-center text-[var(--muted-foreground)]">
-          <p className="mb-3">Enter a search term to find messages.</p>
-          {sources.length > 0 && selectedSources.size === 0 && (
-            <p className="text-xs font-medium text-amber-500">No imports selected — pick at least one import (or a conversation) to search.</p>
+          <p className="mb-3">Enter a search term, or just pick an import / conversation / person and hit Search to browse everything in it (an empty box is treated as a wildcard).</p>
+          {sources.length > 0 && selectedSources.size === 0 && selectedConversations.size === 0 && selectedParticipants.length === 0 && selectedSenders.size === 0 && (
+            <p className="text-xs font-medium text-amber-500">Nothing selected yet — pick an import, conversation, or person to browse.</p>
           )}
           {sources.length > 0 && selectedSources.size > 0 && (
             <div className="text-xs space-y-1">

@@ -16,6 +16,7 @@ export async function POST(request: NextRequest) {
       dateTo,
       contextLines = 3,
       contextMode = "time",
+      contextDirection = "both",
       sortOrder = "asc",
       page = 1,
       limit = 50,
@@ -85,10 +86,12 @@ export async function POST(request: NextRequest) {
 
     const order = sortOrder === "desc" ? "DESC" : "ASC";
     const mainQuery = `
-      SELECT m.*, p.display_name as sender_name, c.title as conversation_title
+      SELECT m.*, p.display_name as sender_name, c.title as conversation_title,
+             s.file_type as source_file_type, s.metadata as source_metadata
       FROM messages m
       LEFT JOIN participants p ON m.sender_id = p.id
       LEFT JOIN conversations c ON m.conversation_id = c.id
+      LEFT JOIN sources s ON m.source_id = s.id
       ${where}
       ORDER BY m.timestamp ${order}
     `;
@@ -131,24 +134,6 @@ export async function POST(request: NextRequest) {
 
           if (contextMode === "messages") {
             const safeConvId = row.conversation_id.replace(/'/g, "''");
-            const beforeResult = db.exec(`
-              SELECT m.*, p.display_name as sender_name
-              FROM messages m
-              LEFT JOIN participants p ON m.sender_id = p.id
-              WHERE m.conversation_id = '${safeConvId}'
-              AND m.timestamp <= '${row.timestamp}'
-              ORDER BY m.timestamp DESC
-              LIMIT ${contextLines + 1}
-            `);
-            const afterResult = db.exec(`
-              SELECT m.*, p.display_name as sender_name
-              FROM messages m
-              LEFT JOIN participants p ON m.sender_id = p.id
-              WHERE m.conversation_id = '${safeConvId}'
-              AND m.timestamp > '${row.timestamp}'
-              ORDER BY m.timestamp ASC
-              LIMIT ${contextLines}
-            `);
             const toObjects = (res: any) => {
               if (!res || !res[0]) return [];
               const { columns: cols, values: vals } = res[0];
@@ -158,14 +143,48 @@ export async function POST(request: NextRequest) {
                 return o;
               });
             };
-            const before = toObjects(beforeResult).reverse();
-            const after = toObjects(afterResult);
+            let before: any[] = [];
+            let after: any[] = [];
+            if (contextDirection !== "after") {
+              const beforeResult = db.exec(`
+                SELECT m.*, p.display_name as sender_name
+                FROM messages m
+                LEFT JOIN participants p ON m.sender_id = p.id
+                WHERE m.conversation_id = '${safeConvId}'
+                AND m.timestamp <= '${row.timestamp}'
+                ORDER BY m.timestamp DESC
+                LIMIT ${contextLines + 1}
+              `);
+              before = toObjects(beforeResult).reverse();
+            }
+            if (contextDirection !== "before") {
+              const afterResult = db.exec(`
+                SELECT m.*, p.display_name as sender_name
+                FROM messages m
+                LEFT JOIN participants p ON m.sender_id = p.id
+                WHERE m.conversation_id = '${safeConvId}'
+                AND m.timestamp > '${row.timestamp}'
+                ORDER BY m.timestamp ASC
+                LIMIT ${contextLines}
+              `);
+              after = toObjects(afterResult);
+            }
+            if (contextDirection === "after") {
+              const selfResult = db.exec(`
+                SELECT m.*, p.display_name as sender_name
+                FROM messages m
+                LEFT JOIN participants p ON m.sender_id = p.id
+                WHERE m.id = '${row.id.replace(/'/g, "''")}'
+                LIMIT 1
+              `);
+              before = toObjects(selfResult);
+            }
             contextMessages = [...before, ...after];
             contextQuery = "";
           } else {
             const ts = new Date(row.timestamp);
-            const startMs = ts.getTime() - contextLines * 60 * 1000;
-            const endMs = ts.getTime() + contextLines * 60 * 1000;
+            const startMs = contextDirection !== "after" ? ts.getTime() - contextLines * 60 * 1000 : ts.getTime();
+            const endMs = contextDirection !== "before" ? ts.getTime() + contextLines * 60 * 1000 : ts.getTime();
             const startIso = new Date(startMs).toISOString();
             const endIso = new Date(endMs).toISOString();
             contextQuery = `

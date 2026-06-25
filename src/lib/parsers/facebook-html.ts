@@ -80,10 +80,12 @@ function extractMessages(html: string): RawMessage[] {
       }
     }
 
-    const videoRe = /<video[^>]*>[\s\S]*?<source[^>]+src="([^"]+)"[^>]*>/g;
+    // FB exports videos as <video src="videos/x.mp4" ...> (src on the tag itself);
+    // older exports use <video>...<source src="...">. Handle both forms.
+    const videoRe = /<video[^>]*\ssrc="([^"]+)"|<video\b[^>]*>[\s\S]*?<source[^>]+src="([^"]+)"/g;
     let videoMatch;
     while ((videoMatch = videoRe.exec(contentBlock)) !== null) {
-      const src = decodeHtmlEntities(videoMatch[1]);
+      const src = decodeHtmlEntities(videoMatch[1] || videoMatch[2]);
       media.push({
         filename: src.split("/").pop() || "",
         localPath: src,
@@ -91,10 +93,10 @@ function extractMessages(html: string): RawMessage[] {
       });
     }
 
-    const audioRe = /<audio[^>]*>[\s\S]*?<source[^>]+src="([^"]+)"[^>]*>/g;
+    const audioRe = /<audio[^>]*\ssrc="([^"]+)"|<audio\b[^>]*>[\s\S]*?<source[^>]+src="([^"]+)"/g;
     let audioMatch;
     while ((audioMatch = audioRe.exec(contentBlock)) !== null) {
-      const src = decodeHtmlEntities(audioMatch[1]);
+      const src = decodeHtmlEntities(audioMatch[1] || audioMatch[2]);
       media.push({
         filename: src.split("/").pop() || "",
         localPath: src,

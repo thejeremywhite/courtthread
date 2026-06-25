@@ -4,6 +4,8 @@ import fs from "fs";
 import path from "path";
 import AdmZip from "adm-zip";
 
+
+
 // Resolve a media file on disk for a given source directory, mirroring /api/media.
 function resolveMediaPath(sourceDir: string, filename: string, mediaType: string): string | null {
   const subdirs = mediaType === "image" ? ["photos", "gifs", "stickers"]
@@ -31,10 +33,13 @@ function rowsToObjects(result: any): any[] {
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleString("en-US", {
-    month: "short", day: "numeric", year: "numeric",
-    hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
-  });
+  const mon = d.toLocaleString("en-US", { month: "short" }).toUpperCase();
+  const day = d.getDate();
+  const yr = d.getFullYear();
+  let hr = d.getHours() % 12 || 12;
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const ampm = d.getHours() >= 12 ? 'P.M.' : 'A.M.';
+  return `${mon} ${day}, ${yr} AT ${hr}:${min} ${ampm}`;
 }
 
 function escapeHtml(text: string): string {
@@ -78,73 +83,1279 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { type, format, includeProvenance, includeTimestamps, includeBatesNumbers, batesPrefix, batesStart } = body;
+    const subFormat: string = body.subFormat || format || "html";
     const includeMedia = body.includeMedia !== false; // default on
-    const embedMedia = body.embedMedia === true && format === "html"; // bundle real files into a ZIP
+    const embedMedia = body.embedMedia === true && (format === "html" || subFormat === "mhtml");
+    const bundleMedia = body.bundleMedia === true;
     const inlineMedia = body.inlineMedia === true && format === "html"; // live <img> tags (for print/PDF)
+    const viewMode: string = body.viewMode || "desktop";
+    const themeMode: string = body.theme || "light";
+    const maxWidth = viewMode === "mobile" ? "412px" : viewMode === "tablet" ? "800px" : "100%";
+    const isDark = themeMode === "dark";
 
-    // Export search results (with their context) exactly as shown on the search page,
-    // matched term highlighted. Used by the search page Export buttons.
+    const db = await getDb();
+
+    const FB_MESSENGER_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAQAAAC1+jfqAAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAB3RJTUUH4wUJExktKVPrMgAAAAJiS0dEAP+Hj8y/AAAAx0lEQVR42n3LsUpCYRiA4W8SZ6WmwmjxGqIgmtwDB5fwCoQgkKBuwLWpZm/gjG6tx83xtLg1lRQKNoRPaPwYlj3ryxuJEw8KMzOFe8fxk4rMpkwl5aonfylUY8nANoNlbvhPI/QlC7kPwEQX9MNY0opQN8JQTQeMQ3qyWFHWVLJvCubhBUztKWkqx4oM8Bpy0HFgiJF6hJYkDzegawKYyy0kt2HXm23e7USEtm3a8U3Pb58uI3Fm06OjWHPo2Z1T565cu1Bbty8r7oMp62N1aQAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAxOS0wNS0xMFQwMjoyNTo0NS0wNzowMC7bZsEAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMTktMDUtMTBUMDI6MjU6NDUtMDc6MDBfht59AAAAAElFTkSuQmCC';
+
+    function lookupSourceInfo(sourceIds: string[]): {
+      filePath: string; fileType: string; importedAt: string;
+      dateObtained: string; platforms: string; exportMethods: string;
+      wasModified: string; sourceDescription: string;
+    } | null {
+      for (const sid of sourceIds) {
+        try {
+          const r = db.exec(`SELECT file_path, file_type, imported_at, metadata FROM sources WHERE id = '${String(sid).replace(/'/g, "''")}'`);
+          if (r[0]?.values[0]) {
+            const fp = r[0].values[0][0] as string || '';
+            const ft = r[0].values[0][1] as string || '';
+            const ia = r[0].values[0][2] as string || '';
+            const meta = r[0].values[0][3] as string || '{}';
+            let localPath = fp;
+            let dateObtained = '', platforms = '', exportMethods = '', wasModified = '', sourceDescription = '';
+            try {
+              const m = JSON.parse(meta);
+              if (m.localMediaPath) localPath = m.localMediaPath;
+              const p = m.provenance || {};
+              if (p.dateObtained) dateObtained = p.dateObtained;
+              if (p.platforms) platforms = Array.isArray(p.platforms) ? p.platforms.join(', ') : String(p.platforms);
+              if (p.exportMethods) exportMethods = Array.isArray(p.exportMethods) ? p.exportMethods.join(', ') : String(p.exportMethods);
+              if (p.wasModified) wasModified = p.wasModified;
+              if (p.sourceDescription) sourceDescription = p.sourceDescription;
+            } catch {}
+            return { filePath: localPath, fileType: ft, importedAt: ia, dateObtained, platforms, exportMethods, wasModified, sourceDescription };
+          }
+        } catch {}
+      }
+      return null;
+    }
+
+    function buildUnifiedHeader(convTitle: string, msgCount: number, msgs: any[], info: ReturnType<typeof lookupSourceInfo>): string {
+      const fileTypeLabel = info?.fileType === 'facebook-json' ? 'Facebook JSON export' : info?.fileType === 'facebook-html' ? 'Facebook HTML export' : info?.fileType || '';
+      let dateRange = '';
+      if (msgs.length > 0) {
+        const first = new Date(msgs[0].timestamp);
+        const last = new Date(msgs[msgs.length - 1].timestamp);
+        const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        dateRange = `${fmt(first)} - ${fmt(last)}`;
+      }
+      const rightParts: string[] = [];
+      if (fileTypeLabel) rightParts.push(escapeHtml(fileTypeLabel));
+      if (dateRange) rightParts.push(escapeHtml(dateRange));
+      const rightHtml = rightParts.length ? ` &nbsp;&middot;&nbsp; ${rightParts.join(' &middot; ')}` : '';
+      return `<div class="ct-header"><span class="ct-hdr-title">${escapeHtml(convTitle)}${rightHtml}</span></div>\n`;
+    }
+
+    function buildUnifiedFooter(info: ReturnType<typeof lookupSourceInfo>): string {
+      const srcPath = info?.filePath || '';
+      const showPath = srcPath && !srcPath.startsWith('upload://');
+      if (!showPath) return '';
+      return `<div class="ct-footer">${escapeHtml(srcPath)}</div>`;
+    }
+
+    const chromeTime = new Date(Date.now() + Math.floor((Math.random() * 6 - 3) * 31800000));
+
+    function buildPhoneChromeTop(convTitle: string, dark: boolean): string {
+      const bg = dark ? '#000' : '#fff';
+      const c = dark ? '#fff' : '#000';
+      const subC = dark ? '#aaa' : '#555';
+      const h = chromeTime.getHours() % 12 || 12;
+      const mm = String(chromeTime.getMinutes()).padStart(2, '0');
+      return `<div class="phone-chrome-top" style="background:${bg};color:${c}"><div class="phone-statusbar"><span style="font-weight:700">${h}:${mm}</span><span class="status-icons"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${subC}" stroke-width="2"><path d="M2 20h.01M7 20v-4M12 20v-8M17 20v-12M22 20V8"/></svg> <svg width="16" height="14" viewBox="0 0 24 24" fill="none" stroke="${subC}" stroke-width="2"><path d="M5 12.55a11 11 0 0 1 14 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01"/></svg> <span style="font-size:10px;border:1.5px solid ${subC};border-radius:3px;padding:0 3px;font-weight:600">90</span></span></div><div class="messenger-hdr"><span class="mhdr-back">←</span><div class="mhdr-avatar"></div><span class="mhdr-name">${escapeHtml(convTitle)}</span><span class="mhdr-info">i</span></div></div>`;
+    }
+
+    function buildPhoneChromeBottom(dark: boolean): string {
+      const bg = dark ? '#000' : '#fff';
+      const c = dark ? '#fff' : '#000';
+      const ic = '#a855f7';
+      const inputBg = dark ? '#303030' : '#f0f0f0';
+      const inputBorder = dark ? '#444' : '#ddd';
+      const fc = dark ? '#888' : '#999';
+      const navBg = dark ? '#000' : '#fff';
+      const navC = dark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.35)';
+      return `<div class="phone-chrome-bottom" style="background:${bg}"><div class="messenger-input-bar"><span class="mib-icon" style="color:${ic}"><svg width="22" height="22" viewBox="0 0 24 24" fill="${ic}"><circle cx="12" cy="12" r="10" fill="none" stroke="${ic}" stroke-width="2"/><path d="M12 8v8M8 12h8" stroke="${ic}" stroke-width="2"/></svg></span><span class="mib-icon" style="color:${ic}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${ic}" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="${ic}"/><path d="M21 15l-5-5L5 21"/></svg></span><span class="mib-icon" style="color:${ic}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${ic}" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5" fill="${ic}"/><path d="M21 15l-5-5L5 21"/></svg></span><span class="mib-icon" style="color:${ic}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="${ic}" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg></span><div class="mib-field" style="background:${inputBg};border:1px solid ${inputBorder};color:${fc}">Message</div><span class="mib-icon" style="color:${ic}; font-size:22px">\u{1F642}</span><span class="mib-icon" style="font-size:22px">\u{1F44D}</span></div><div class="phone-navbar" style="background:${navBg}"><span style="color:${navC};font-weight:700;font-size:16px;letter-spacing:2px">|||</span><span class="nav-circle" style="border-color:${navC}"></span><span style="color:${navC};font-size:18px;font-weight:300">‹</span></div></div>`;
+    }
+
+    function buildPrintToolbar(title?: string): string {
+      const hdrDefault = title || '';
+      return `<div class="print-toolbar">
+<label>Layout: <select id="nup" onchange="setNup(parseInt(this.value))">
+<option value="1">1-up (single)</option>
+<option value="2">2-up (side by side)</option>
+<option value="4">4-up (compact)</option>
+</select></label>
+<button id="tb-view-toggle" class="tb-btn" style="background:#444;color:#eee" onclick="cycleView()" title="Cycle Mobile / Tablet / Desktop">View: <span id="tb-view-label">${viewMode === 'tablet' ? 'Tablet' : viewMode === 'desktop' ? 'Desktop' : 'Mobile'}</span></button>
+<select id="tb-view" style="display:none" onchange="applyViewMode();_saveSettings()">
+<option value="mobile"${viewMode === 'mobile' || !viewMode ? ' selected' : ''}>Mobile (412px)</option>
+<option value="tablet"${viewMode === 'tablet' ? ' selected' : ''}>Tablet (800px)</option>
+<option value="desktop"${viewMode === 'desktop' ? ' selected' : ''}>Desktop</option>
+</select>
+<button id="tb-theme-toggle" class="tb-btn" style="background:#444;color:#eee;display:inline-flex;align-items:center;gap:6px" onclick="toggleTheme()" title="Toggle light/dark"><span id="tb-theme-icon">${isDark ? '\u{1F319}' : '☀️'}</span><span id="tb-theme-label">${isDark ? 'Dark' : 'Light'}</span></button>
+<select id="tb-theme" style="display:none" onchange="applyTheme(this.value);_saveSettings()">
+<option value="light"${!isDark ? ' selected' : ''}>Light</option>
+<option value="dark"${isDark ? ' selected' : ''}>Dark</option>
+</select>
+<button class="tb-btn" style="background:#444;color:#eee" onclick="openPageSetup()">Page Setup</button>
+<span id="ctx-controls" style="display:inline-flex;align-items:center;gap:4px;color:#ccc;font-size:12px"><strong style="font-weight:600;margin-right:2px">Context</strong> Before: <button class="tb-btn" style="background:#444;color:#eee;padding:2px 8px;font-size:14px;font-weight:700" onclick="adjustCtx('before',-1)" title="Fewer messages before each match">−</button><span id="ctx-before" style="min-width:18px;text-align:center">0</span><button class="tb-btn" style="background:#444;color:#eee;padding:2px 8px;font-size:14px;font-weight:700" onclick="adjustCtx('before',1)" title="More messages before each match">+</button> After: <button class="tb-btn" style="background:#444;color:#eee;padding:2px 8px;font-size:14px;font-weight:700" onclick="adjustCtx('after',-1)" title="Fewer messages after each match">−</button><span id="ctx-after" style="min-width:18px;text-align:center">0</span><button class="tb-btn" style="background:#444;color:#eee;padding:2px 8px;font-size:14px;font-weight:700" onclick="adjustCtx('after',1)" title="More messages after each match">+</button></span>
+<label>From: <input type="date" id="tb-from" onchange="filterByDate()" class="tb-input"></label>
+<label>To: <input type="date" id="tb-to" onchange="filterByDate()" class="tb-input"></label>
+<button class="tb-btn tb-print" onclick="window.print()">Print</button>
+</div>
+<div id="page-setup-dialog" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;z-index:200;background:rgba(0,0,0,0.6);backdrop-filter:blur(4px)">
+<div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#1e1e1e;border:1px solid #444;border-radius:12px;padding:24px;width:480px;max-height:80vh;overflow-y:auto;color:#eee;font-size:13px">
+<h3 style="margin:0 0 16px;font-size:16px;font-weight:600;color:#fff">Page Setup</h3>
+<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #333">
+<h4 style="margin:0 0 8px;font-size:13px;color:#aaa;text-transform:uppercase;letter-spacing:1px">Header</h4>
+<label style="display:block;margin-bottom:6px">Text: <input type="text" id="ps-hdr-text" style="width:100%;padding:6px 8px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;font-size:13px;margin-top:2px" value="${escapeHtml(hdrDefault)}"></label>
+<div style="display:flex;gap:12px;margin-top:8px">
+<label style="flex:1">Font size (px): <input type="number" id="ps-hdr-size" min="6" max="96" step="1" value="12" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px"></label>
+<label style="flex:1">Font: <select id="ps-hdr-font" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
+<option value="inherit">Default (Segoe UI)</option><option value="'Times New Roman',serif">Times New Roman</option><option value="'Courier New',monospace">Courier New</option><option value="Arial,sans-serif">Arial</option><option value="Georgia,serif">Georgia</option>
+</select></label>
+<label style="flex:1">Weight: <select id="ps-hdr-weight" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
+<option value="400">Normal</option><option value="500" selected>Medium</option><option value="600">Semi-bold</option><option value="700">Bold</option>
+</select></label>
+<label style="flex:1">Align: <select id="ps-hdr-align" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
+<option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option>
+</select></label>
+</div>
+<label style="display:block;margin-top:8px">Distance from top: <input type="range" id="ps-hdr-dist" min="0" max="120" value="14" style="width:100%;margin-top:2px"><span id="ps-hdr-dist-val">14px</span></label>
+</div>
+<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #333">
+<h4 style="margin:0 0 8px;font-size:13px;color:#aaa;text-transform:uppercase;letter-spacing:1px">Footer</h4>
+<label style="display:block;margin-bottom:6px">Text: <input type="text" id="ps-ftr-text" style="width:100%;padding:6px 8px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;font-size:13px;margin-top:2px" value=""></label>
+<div style="display:flex;gap:12px;margin-top:8px">
+<label style="flex:1">Font size (px): <input type="number" id="ps-ftr-size" min="6" max="96" step="1" value="10" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px"></label>
+<label style="flex:1">Font: <select id="ps-ftr-font" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
+<option value="inherit">Default (Segoe UI)</option><option value="'Times New Roman',serif">Times New Roman</option><option value="'Courier New',monospace">Courier New</option><option value="Arial,sans-serif">Arial</option><option value="Georgia,serif">Georgia</option>
+</select></label>
+<label style="flex:1">Weight: <select id="ps-ftr-weight" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
+<option value="400" selected>Normal</option><option value="500">Medium</option><option value="600">Semi-bold</option><option value="700">Bold</option>
+</select></label>
+<label style="flex:1">Align: <select id="ps-ftr-align" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
+<option value="left">Left</option><option value="center" selected>Center</option><option value="right">Right</option>
+</select></label>
+</div>
+<label style="display:block;margin-top:8px">Distance from bottom: <input type="range" id="ps-ftr-dist" min="0" max="120" value="14" style="width:100%;margin-top:2px"><span id="ps-ftr-dist-val">14px</span></label>
+<label style="display:flex;align-items:center;gap:8px;margin-top:10px"><input type="checkbox" id="ps-pagenum" checked> Show page numbers (bottom-right)</label>
+<label style="display:block;margin-top:6px">Page number font size (px): <input type="number" id="ps-pagenum-size" min="6" max="48" step="1" value="9" style="width:90px;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px"></label>
+</div>
+<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+<button onclick="closePageSetup()" style="padding:8px 16px;border-radius:6px;border:1px solid #555;background:#333;color:#eee;cursor:pointer;font-size:13px">Cancel</button>
+<button onclick="applyPageSetup()" style="padding:8px 16px;border-radius:6px;border:none;background:#3578E5;color:#fff;cursor:pointer;font-size:13px;font-weight:600">Apply</button>
+</div>
+</div>
+</div>
+<script>
+var _serverHtml=null;
+var _curNup=1;
+var _ctxBefore=0;var _ctxAfter=0;
+var _viewSizes={mobile:412,tablet:800,desktop:1040};
+
+function _isDark(){return document.getElementById('tb-theme').value==='dark'}
+function _getViewW(){var s=document.getElementById('tb-view');return _viewSizes[s?s.value:'mobile']||412}
+// Client-side mirror of the server formatTimestamp() — "OCT 24, 2023 AT 10:11 A.M."
+function _fmtTs(iso){
+  var d=new Date(iso);
+  var mon=d.toLocaleString('en-US',{month:'short'}).toUpperCase();
+  var hr=d.getHours()%12||12;var min=('0'+d.getMinutes()).slice(-2);
+  var ap=d.getHours()>=12?'P.M.':'A.M.';
+  return mon+' '+d.getDate()+', '+d.getFullYear()+' AT '+hr+':'+min+' '+ap;
+}
+
+function _colorize(root,d){
+  root.querySelectorAll('.bubble-out').forEach(function(b){b.style.background='linear-gradient(160deg,#2a8bff 0%,#3b6ef5 45%,#6a5cf0 100%)'});
+  root.querySelectorAll('.bubble-in').forEach(function(b){b.style.background=d?'#303030':'#c4cad3';b.style.color=d?'#ededed':'#0a0a0a'});
+  root.querySelectorAll('.bubble-call').forEach(function(b){b.style.background=d?'#303030':'#c4cad3';b.style.color=d?'#a1a1aa':'#4a4d52'});
+  root.querySelectorAll('.sender-name').forEach(function(e){e.style.color=d?'#a1a1aa':'#65676b'});
+  root.querySelectorAll('.date-label').forEach(function(e){e.style.color=d?'#a1a1aa':'#65676b'});
+}
+
+function _restoreOriginal(){
+  var thread=document.querySelector('.thread');
+  if(!thread)return null;
+  if(!_serverHtml)_serverHtml=thread.innerHTML;
+  thread.innerHTML=_serverHtml;
+  return thread;
+}
+
+function applyTheme(v){
+  _restoreOriginal();
+  var d=v==='dark';
+  var bezel=document.querySelector('.thread-bezel');
+  var thread=document.querySelector('.thread');
+  if(bezel){bezel.style.background='transparent';bezel.style.border='none'}
+  if(thread){thread.style.background=d?'#000':'#fff';thread.style.color=d?'#ededed':'#0a0a0a'}
+  _colorize(thread||document,d);
+  _updateChrome(d);
+  // keep the toggle button label/icon in sync with the active theme
+  var ti=document.getElementById('tb-theme-icon');if(ti)ti.textContent=d?'\u{1F319}':'☀️';
+  var tl=document.getElementById('tb-theme-label');if(tl)tl.textContent=d?'Dark':'Light';
+  _serverHtml=thread.innerHTML;
+  _rebuildLayout();
+}
+function toggleTheme(){
+  var sel=document.getElementById('tb-theme');
+  if(!sel)return;
+  sel.value=sel.value==='dark'?'light':'dark';
+  applyTheme(sel.value);
+  _saveSettings();
+}
+function setNup(n){
+  // Wait for images so re-pagination measures real heights (consistent across n-up).
+  _whenImagesReady(function(){applyNup(n)});
+  _saveSettings();
+}
+function cycleView(){
+  var sel=document.getElementById('tb-view');
+  if(!sel)return;
+  var order=['mobile','tablet','desktop'];
+  var i=order.indexOf(sel.value);
+  sel.value=order[(i+1)%order.length];
+  var lbl=document.getElementById('tb-view-label');
+  if(lbl)lbl.textContent=sel.value.charAt(0).toUpperCase()+sel.value.slice(1);
+  applyViewMode();
+  _saveSettings();
+}
+function _updateChrome(d){
+  var tops=document.querySelectorAll('.phone-chrome-top');
+  tops.forEach(function(el){el.style.background=d?'#000':'#fff';el.style.color=d?'#fff':'#000'});
+  var bots=document.querySelectorAll('.phone-chrome-bottom');
+  bots.forEach(function(el){el.style.background=d?'#000':'#fff'});
+  document.querySelectorAll('.mib-field').forEach(function(el){el.style.background=d?'#303030':'#f0f0f0';el.style.borderColor=d?'#444':'#ddd';el.style.color=d?'#888':'#999'});
+  document.querySelectorAll('.phone-navbar').forEach(function(el){el.style.background=d?'#000':'#fff'});
+  document.querySelectorAll('.nav-circle').forEach(function(el){el.style.borderColor=d?'rgba(255,255,255,0.4)':'rgba(0,0,0,0.35)'});
+  document.querySelectorAll('.phone-navbar span:not(.nav-circle)').forEach(function(el){el.style.color=d?'rgba(255,255,255,0.4)':'rgba(0,0,0,0.35)'});
+}
+
+function applyViewMode(){_whenImagesReady(_rebuildLayout)}
+
+function _rebuildLayout(){
+  if(_curNup>1){applyNup(_curNup)}else{applyNup(1)}
+}
+
+function _paginate(){
+  var RATIO=2340/1080;
+  var thread=document.querySelector('.thread');
+  if(!thread)return[];
+  if(!_serverHtml)_serverHtml=thread.innerHTML;
+  thread.innerHTML=_serverHtml;
+  // The blob is ALWAYS the mobile Messenger phone. Paginate at a fixed 412px reference
+  // so the page count is identical regardless of n-up / view-mode display size.
+  var REF=412;
+  var refH=Math.round(REF*RATIO);
+  var viewW=REF;
+  // Chrome PNG: top graphics end at 10.6%, bottom graphics start at 87.8% (measured
+  // from the template's transparent region). Pad to those lines so messages live in
+  // the safe zone and never sit under the header.
+  var padTop=Math.round(refH*0.108);
+  var padBot=Math.round(refH*0.122);
+  var usableH=refH-padTop-padBot;
+  // Only filtered-in rows participate (respect the date filter).
+  var children=Array.from(thread.children).filter(function(c){return c.style.display!=='none'});
+  var measurer=document.createElement('div');
+  measurer.style.cssText='position:absolute;left:-9999px;top:0;width:'+viewW+'px;font-size:15px;overflow:visible;visibility:hidden;word-break:break-word;overflow-wrap:break-word';
+  measurer.style.fontFamily=getComputedStyle(thread).fontFamily;
+  document.body.appendChild(measurer);
+  function h(el){measurer.innerHTML='';measurer.appendChild(el.cloneNode(true));return measurer.scrollHeight}
+  function isSepEl(el){return el.classList&&el.classList.contains('date-sep')}
+  // Greedy fill: pack each page until a message crosses the bottom safe-zone line.
+  // That boundary message is ALLOWED to bleed under the footer chrome (clipped) and is
+  // then REPEATED in full at the top of the next page (like overlapping screenshots).
+  // pendingOverlap is materialised only when a real next message follows, so we never
+  // emit a trailing page that just re-shows the last message.
+  var pages=[];var cur=[];var curH=0;var lastSep=null;var pendingOverlap=null;
+  for(var i=0;i<children.length;i++){
+    var el=children[i];
+    var sep=isSepEl(el);
+    var eh=h(el);
+    if(sep){
+      // A timestamp must never be the last thing on a page (orphan). If it can't fit,
+      // start a new page so it sits above its messages.
+      if(curH+eh>usableH&&cur.length>0){pages.push(cur);cur=[];curH=0;}
+      if(pendingOverlap&&cur.length===0){for(var a=0;a<pendingOverlap.length;a++){var pc=pendingOverlap[a].cloneNode(true);cur.push(pc);curH+=h(pc);}pendingOverlap=null;}
+      lastSep=el;
+      cur.push(el.cloneNode(true));curH+=eh;
+      continue;
+    }
+    // Flush any carried-over (duplicate) boundary message at the very top of a fresh page.
+    if(pendingOverlap&&cur.length===0){for(var b=0;b<pendingOverlap.length;b++){var pc2=pendingOverlap[b].cloneNode(true);cur.push(pc2);curH+=h(pc2);}pendingOverlap=null;}
+    cur.push(el.cloneNode(true));curH+=eh;
+    if(curH>usableH){
+      pages.push(cur);
+      // Repeat ONLY the boundary message itself at the top of the next page. We do NOT
+      // carry the group's timestamp — it belongs to the first message of the group and
+      // re-showing it above a mid-group continuation mis-labels it (e.g. my 12:26 above
+      // her 12:27 message). A continuation simply shows no timestamp.
+      pendingOverlap=[el];
+      cur=[];curH=0;
+    }
+  }
+  if(cur.length>0)pages.push(cur);
+  document.body.removeChild(measurer);
+  // NOTE: we deliberately do NOT force a timestamp at the top of every page. Timestamps
+  // appear only at real gaps (Messenger-style); a continuation page simply starts with
+  // a message and no timestamp, which is what real scrolled screenshots look like.
+  return pages;
+}
+function applyNup(n){
+  _curNup=n;
+  if(document.body)document.body.className=document.body.className.replace(/\bnup-\d+\b/,'nup-'+n);
+  var RATIO=2340/1080;
+  var bezel=document.querySelector('.thread-bezel');
+  var thread=document.querySelector('.thread');
+  if(!thread)return;
+  var d=_isDark();
+  var innerBg=d?'#000':'#fff';
+  var innerColor=d?'#ededed':'#0a0a0a';
+  var pages=_paginate();
+  var bezelChTop=bezel?bezel.querySelector(':scope > .phone-chrome-top'):null;
+  var bezelChBot=bezel?bezel.querySelector(':scope > .phone-chrome-bottom'):null;
+  if(bezelChTop)bezelChTop.style.display='none';
+  if(bezelChBot)bezelChBot.style.display='none';
+  // The blob is ALWAYS the mobile phone with chrome. Fixed phone widths (px == print
+  // inches @96dpi): 1-up & 2-up share 3.5in, 4-up is 2in. View mode (mobile/tablet/
+  // desktop) only scales the on-screen preview via a zoom on .thread (print resets it).
+  var REF=412;
+  var perRow=(n===1?1:2);
+  // Sizes (px == print inches @96dpi, aspect 2340/1080 preserved):
+  //  1-up & 2-up share 3.5in wide (1-up centered, 2-up two side-by-side per page).
+  //  4-up is capped at 4.5in TALL so 2 rows (=4 phones) fit a page -> ~2.08in wide.
+  var phoneW=(n===4?200:336);
+  var phoneH=Math.round(phoneW*RATIO);
+  var fontSize=Math.round(15*(phoneW/REF)*10)/10;
+  var bgImg=d?'/phone-chrome/dark.png':'/phone-chrome/light.png';
+  var padTop=Math.round(phoneH*0.108);
+  var padBot=Math.round(phoneH*0.122);
+  if(bezel){bezel.style.maxWidth='none';bezel.style.padding='0';bezel.style.background='transparent';bezel.style.borderRadius='0';bezel.style.boxShadow='none';bezel.style.border='none'}
+  thread.style.maxWidth='none';thread.style.border='none';thread.style.borderRadius='0';thread.style.padding='0';thread.style.background='transparent';thread.style.overflow='visible';thread.style.zoom='1';thread.style.display='flex';thread.style.justifyContent='center';
+  thread.innerHTML='';
+
+  // Provenance lives in the table's thead/tfoot so the browser REPEATS it on every
+  // printed page (table-header-group / table-footer-group). Page Setup edits the hidden
+  // ct-header/ct-footer, which we mirror here.
+  var provHdrEl=document.querySelector('.ct-header .ct-hdr-title');
+  var provFtrEl=document.querySelector('.ct-footer');
+  function copyProv(td,el){if(!el)return;['fontSize','fontFamily','fontWeight','textAlign','paddingTop','paddingBottom'].forEach(function(p){if(el.style[p])td.style[p]=el.style[p]});if(!td.style.textAlign)td.style.textAlign='center'}
+
+  var table=document.createElement('table');
+  table.className='phone-table';
+  var thead=document.createElement('thead');
+  var thtr=document.createElement('tr');var thtd=document.createElement('td');
+  thtd.colSpan=perRow;thtd.className='pt-head';thtd.textContent=provHdrEl?provHdrEl.textContent:'';copyProv(thtd,provHdrEl);
+  thtr.appendChild(thtd);thead.appendChild(thtr);table.appendChild(thead);
+  var tfoot=document.createElement('tfoot');
+  var fttr=document.createElement('tr');var fttd=document.createElement('td');
+  fttd.colSpan=perRow;fttd.className='pt-foot';fttd.textContent=provFtrEl?provFtrEl.textContent:'';copyProv(fttd,provFtrEl);
+  fttr.appendChild(fttd);tfoot.appendChild(fttr);table.appendChild(tfoot);
+
+  var tbody=document.createElement('tbody');
+  var tr=document.createElement('tr');var inRow=0;
+  for(var p=0;p<pages.length;p++){
+    // Layering: solid base (pv) -> messages (content) -> chrome PNG overlay on top, so
+    // overflow slides BEHIND the header/footer chrome instead of over it.
+    var pv=document.createElement('div');
+    pv.className='phone-viewport';
+    pv.style.cssText='position:relative;display:block;background:'+innerBg+';color:'+innerColor+';border:none;border-radius:0;box-shadow:0 2px 10px rgba(0,0,0,0.3);width:'+phoneW+'px;height:'+phoneH+'px;overflow:hidden;font-size:'+fontSize+'px;word-break:break-word;overflow-wrap:break-word;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    var content=document.createElement('div');
+    content.style.cssText='position:absolute;top:0;left:0;right:0;bottom:0;z-index:1;overflow:hidden;padding:'+padTop+'px 10px '+padBot+'px;color:'+innerColor+';background:transparent;box-sizing:border-box';
+    for(var m=0;m<pages[p].length;m++){content.appendChild(pages[p][m].cloneNode(true))}
+    pv.appendChild(content);
+    var overlay=document.createElement('div');
+    overlay.className='phone-chrome-overlay';
+    overlay.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%;z-index:5;background:url('+bgImg+') center/100% 100% no-repeat;pointer-events:none;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    pv.appendChild(overlay);
+    // Messenger's scroll-to-bottom down-arrow, centered just above the input bar.
+    // Shown on EVERY viewport (the exported content is always old/scrolled-up, never
+    // within a few messages of the live bottom where it would hide).
+    var arrow=document.createElement('img');
+    arrow.className='scroll-arrow';
+    arrow.src=d?'/phone-chrome/layer1.png':'/phone-chrome/layer1-light.png';
+    arrow.style.cssText='position:absolute;left:50%;transform:translateX(-50%);bottom:'+Math.round(phoneH*0.135)+'px;width:'+Math.round(phoneW*0.1)+'px;height:auto;z-index:6;pointer-events:none;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    arrow.setAttribute('alt','');
+    arrow.onerror=function(){this.style.display='none'};
+    pv.appendChild(arrow);
+    var td=document.createElement('td');td.className='pt-cell';td.appendChild(pv);
+    tr.appendChild(td);inRow++;
+    if(inRow===perRow){tbody.appendChild(tr);tr=document.createElement('tr');inRow=0}
+  }
+  if(inRow>0){while(inRow<perRow){var etd=document.createElement('td');etd.className='pt-cell';tr.appendChild(etd);inRow++}tbody.appendChild(tr)}
+  table.appendChild(tbody);
+  thread.appendChild(table);
+}
+
+function filterByDate(){
+  var thread=document.querySelector('.thread');
+  if(!thread)return;
+  if(!_serverHtml)_serverHtml=thread.innerHTML;
+  thread.innerHTML=_serverHtml;
+  var f=document.getElementById('tb-from').value,t=document.getElementById('tb-to').value;
+  if(f||t){
+    var fromLocal=f?new Date(f+'T00:00:00'):null;
+    var toLocal=t?(function(){var te=new Date(t+'T00:00:00');te.setDate(te.getDate()+1);return te})():null;
+    thread.querySelectorAll('.msg-row,.call-row').forEach(function(r){var ts=r.getAttribute('data-ts');if(!ts){r.style.display='';return}var dd=new Date(ts);var show=true;if(fromLocal&&dd<fromLocal)show=false;if(toLocal&&dd>=toLocal)show=false;r.style.display=show?'':'none'});
+    thread.querySelectorAll('.date-sep').forEach(function(s){var ts=s.getAttribute('data-ts');if(!ts)return;var dd=new Date(ts);var show=true;if(fromLocal&&dd<fromLocal)show=false;if(toLocal&&dd>=toLocal)show=false;s.style.display=show?'':'none'});
+  }
+  _serverHtml=thread.innerHTML;
+  _rebuildLayout();
+}
+
+var _ctxBusy=false;
+function adjustCtx(which,delta){
+  if(which==='before')_ctxBefore=Math.max(0,_ctxBefore+delta);
+  else _ctxAfter=Math.max(0,_ctxAfter+delta);
+  var b=document.getElementById('ctx-before');if(b)b.textContent=_ctxBefore;
+  var a=document.getElementById('ctx-after');if(a)a.textContent=_ctxAfter;
+  var payload=window._exportPayload;
+  if(!payload)return;                 // context only applies to search-result exports
+  if(_ctxBusy)return; _ctxBusy=true;
+  payload.contextBefore=_ctxBefore;
+  payload.contextAfter=_ctxAfter;
+  _saveSettings();
+  fetch('/api/export',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(function(r){return r.text()}).then(function(html){
+    var parser=new DOMParser();
+    var doc=parser.parseFromString(html,'text/html');
+    var newThread=doc.querySelector('.thread');
+    var curThread=document.querySelector('.thread');
+    if(newThread&&curThread){
+      curThread.innerHTML=newThread.innerHTML;
+      // Re-apply the active theme colours to the freshly-fetched messages, otherwise
+      // the new bubbles fall back to default CSS (the "bubble colour changed" bug).
+      var d=_isDark();
+      _colorize(curThread,d);
+      _serverHtml=curThread.innerHTML;
+      _rebuildLayout();
+    }
+    _ctxBusy=false;
+  }).catch(function(){_ctxBusy=false});
+}
+
+function updateHeader(text){
+  var hdr=document.querySelector('.ct-header .ct-hdr-title');
+  if(hdr&&text)hdr.textContent=text;
+}
+
+function openPageSetup(){
+  var dlg=document.getElementById('page-setup-dialog');
+  if(!dlg)return;
+  var hdr=document.querySelector('.ct-header .ct-hdr-title');
+  var ftr=document.querySelector('.ct-footer');
+  var hdrInput=document.getElementById('ps-hdr-text');
+  var ftrInput=document.getElementById('ps-ftr-text');
+  if(hdrInput&&hdr)hdrInput.value=hdr.textContent||'';
+  if(ftrInput&&ftr)ftrInput.value=ftr.textContent||'';
+  dlg.style.display='flex';
+}
+function closePageSetup(){
+  var dlg=document.getElementById('page-setup-dialog');
+  if(dlg)dlg.style.display='none';
+}
+// Click any photo to enlarge it in a full-screen lightbox (click again to close).
+document.addEventListener('click',function(e){
+  var t=e.target;
+  if(t&&t.tagName==='IMG'&&t.classList&&t.classList.contains('media')){
+    var ov=document.createElement('div');
+    ov.className='no-print';
+    ov.style.cssText='position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.92);display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+    var big=document.createElement('img');big.src=t.src;big.style.cssText='max-width:96vw;max-height:96vh;object-fit:contain;box-shadow:0 4px 30px rgba(0,0,0,0.6)';
+    ov.appendChild(big);ov.addEventListener('click',function(){ov.remove()});
+    document.body.appendChild(ov);
+  }
+});
+// Page numbers via the CSS @page bottom-right margin box (Chrome print). Toggled by
+// injecting/clearing a stylesheet (default ON).
+function _applyPageNum(){
+  var s=document.getElementById('pagenum-style');
+  if(!s){s=document.createElement('style');s.id='pagenum-style';document.head.appendChild(s)}
+  s.textContent=(window._showPageNum!==false)?'@media print{@page{@bottom-right{content:counter(page);font-size:9px;color:#555;margin:0}}}':'';
+}
+function applyPageSetup(silent){
+  var hdrText=document.getElementById('ps-hdr-text');
+  var hdrSize=document.getElementById('ps-hdr-size');
+  var hdrFont=document.getElementById('ps-hdr-font');
+  var hdrWeight=document.getElementById('ps-hdr-weight');
+  var hdrDist=document.getElementById('ps-hdr-dist');
+  var ftrText=document.getElementById('ps-ftr-text');
+  var ftrSize=document.getElementById('ps-ftr-size');
+  var ftrFont=document.getElementById('ps-ftr-font');
+  var ftrWeight=document.getElementById('ps-ftr-weight');
+  var ftrDist=document.getElementById('ps-ftr-dist');
+  var hdrAlign=document.getElementById('ps-hdr-align');
+  var ftrAlign=document.getElementById('ps-ftr-align');
+  var hdr=document.querySelector('.ct-header .ct-hdr-title');
+  var ftr=document.querySelector('.ct-footer');
+  if(hdr&&hdrText&&hdrText.value){hdr.textContent=hdrText.value}
+  function pxv(el){var n=el?parseInt(el.value,10):NaN;return isNaN(n)?'':n+'px'}
+  if(hdr){
+    if(hdrSize&&pxv(hdrSize))hdr.style.fontSize=pxv(hdrSize);
+    if(hdrFont)hdr.style.fontFamily=hdrFont.value;
+    if(hdrWeight)hdr.style.fontWeight=hdrWeight.value;
+    if(hdrAlign)hdr.style.textAlign=hdrAlign.value;
+    // "distance from top" = the GAP between the header and the phone below it, so the
+    // header never touches the viewport. Stored as paddingBottom on the header cell.
+    if(hdrDist)hdr.style.paddingBottom=parseInt(hdrDist.value,10)+'px';
+  }
+  if(ftr&&ftrText&&ftrText.value)ftr.textContent=ftrText.value;
+  if(ftr){
+    if(ftrSize&&pxv(ftrSize))ftr.style.fontSize=pxv(ftrSize);
+    if(ftrFont)ftr.style.fontFamily=ftrFont.value;
+    if(ftrWeight)ftr.style.fontWeight=ftrWeight.value;
+    if(ftrAlign)ftr.style.textAlign=ftrAlign.value;
+    // "distance from bottom" = the GAP between the phone and the footer.
+    if(ftrDist)ftr.style.paddingTop=parseInt(ftrDist.value,10)+'px';
+  }
+  var pn=document.getElementById('ps-pagenum');
+  window._showPageNum=pn?pn.checked:true;
+  var pns=document.getElementById('ps-pagenum-size');
+  window._pageNumSize=pns?(parseInt(pns.value,10)||9):9;
+  _applyPageNum();
+  // The provenance is mirrored into the print table's thead/tfoot, so rebuild to apply.
+  _rebuildLayout();
+  // silent === true when re-applying saved settings on load; otherwise persist + close.
+  if(silent!==true){_saveGlobalPrefs();_saveSettings();closePageSetup()}
+}
+
+// Wire up range slider labels
+document.querySelectorAll('#ps-hdr-dist,#ps-ftr-dist').forEach(function(r){
+  r.addEventListener('input',function(){
+    var lbl=document.getElementById(r.id+'-val');
+    if(lbl)lbl.textContent=r.value+'px';
+  });
+});
+
+// --- Settings persistence, keyed PER DOCUMENT ---
+// The blob page must not reset on refresh, but a brand-new export (different
+// conversation / date range / search) must start from the settings chosen on its
+// SOURCE page (e.g. the search page's Light/Dark). We key localStorage to a hash of
+// this document's identity: same export -> restore everything; new export -> nothing
+// saved yet, so the server-rendered (source) values stand.
+var _SKEY=null;
+function _docKey(){
+  var h=document.querySelector('.ct-hdr-title');
+  var base=(h?h.textContent:document.title)+'|'+document.querySelectorAll('.msg-row').length;
+  var hash=0;for(var i=0;i<base.length;i++){hash=((hash<<5)-hash+base.charCodeAt(i))|0}
+  return 'ct_blob_'+hash;
+}
+function _val(id){var e=document.getElementById(id);return e?e.value:''}
+// GLOBAL page-setup preferences (font/size/weight/align/distance + page numbers).
+// These stick across ALL chats — a setting you apply stays applied everywhere. The
+// header/footer TEXT itself is per-document (the provenance), handled separately.
+var _GKEY='ct_blob_pagesetup_v1';
+function _saveGlobalPrefs(){
+  try{
+    var g={
+      hdrSize:_val('ps-hdr-size'),hdrFont:_val('ps-hdr-font'),hdrWeight:_val('ps-hdr-weight'),hdrAlign:_val('ps-hdr-align'),hdrDist:_val('ps-hdr-dist'),
+      ftrSize:_val('ps-ftr-size'),ftrFont:_val('ps-ftr-font'),ftrWeight:_val('ps-ftr-weight'),ftrAlign:_val('ps-ftr-align'),ftrDist:_val('ps-ftr-dist'),
+      pagenum:(document.getElementById('ps-pagenum')||{}).checked
+    };
+    localStorage.setItem(_GKEY,JSON.stringify(g));
+  }catch(e){}
+}
+function _loadGlobalPrefs(){try{var r=localStorage.getItem(_GKEY);return r?JSON.parse(r):null}catch(e){return null}}
+function _applyGlobalPrefs(){
+  var g=_loadGlobalPrefs();if(!g)return;
+  function setv(id,v){var e=document.getElementById(id);if(e&&v!=null&&v!=='')e.value=v}
+  setv('ps-hdr-size',g.hdrSize);setv('ps-hdr-font',g.hdrFont);setv('ps-hdr-weight',g.hdrWeight);setv('ps-hdr-align',g.hdrAlign);setv('ps-hdr-dist',g.hdrDist);
+  setv('ps-ftr-size',g.ftrSize);setv('ps-ftr-font',g.ftrFont);setv('ps-ftr-weight',g.ftrWeight);setv('ps-ftr-align',g.ftrAlign);setv('ps-ftr-dist',g.ftrDist);
+  var pn=document.getElementById('ps-pagenum');if(pn&&typeof g.pagenum==='boolean')pn.checked=g.pagenum;
+}
+function _saveSettings(){
+  try{
+    if(!_SKEY)_SKEY=_docKey();
+    var s={
+      nup:_curNup,
+      view:_val('tb-view'),theme:_val('tb-theme'),from:_val('tb-from'),to:_val('tb-to'),
+      ctxBefore:_ctxBefore,ctxAfter:_ctxAfter,
+      ps:{hdrText:_val('ps-hdr-text'),ftrText:_val('ps-ftr-text')}
+    };
+    localStorage.setItem(_SKEY,JSON.stringify(s));
+  }catch(e){}
+}
+function _loadSettings(){
+  try{
+    if(!_SKEY)_SKEY=_docKey();
+    var raw=localStorage.getItem(_SKEY);if(!raw)return null;
+    return JSON.parse(raw);
+  }catch(e){return null}
+}
+
+// Re-run a function once every image in the thread has finished loading, so
+// pagination measures real heights (deterministic — no alternating layout on refresh).
+function _whenImagesReady(cb){
+  var thread=document.querySelector('.thread');
+  if(!thread){cb();return}
+  var imgs=Array.prototype.slice.call(thread.querySelectorAll('img'));
+  var pending=imgs.filter(function(im){return !im.complete||im.naturalHeight===0});
+  if(pending.length===0){cb();return}
+  var done=0,fired=false;
+  function one(){done++;if(done>=pending.length&&!fired){fired=true;cb()}}
+  pending.forEach(function(im){
+    im.addEventListener('load',one);
+    im.addEventListener('error',one);
+  });
+  // Safety net in case some image never resolves.
+  setTimeout(function(){if(!fired){fired=true;cb()}},4000);
+}
+
+function _initLayout(){
+  // Restore settings saved for THIS document (same conversation + range). For a NEW
+  // export nothing is saved, so the server-rendered (source-page) values stand — that
+  // keeps the search page's Light/Dark + date range authoritative on first open.
+  var s=_loadSettings();
+  if(s){
+    if(s.view&&document.getElementById('tb-view'))document.getElementById('tb-view').value=s.view;
+    if(s.theme&&document.getElementById('tb-theme'))document.getElementById('tb-theme').value=s.theme;
+    if(s.from&&document.getElementById('tb-from'))document.getElementById('tb-from').value=s.from;
+    if(s.to&&document.getElementById('tb-to'))document.getElementById('tb-to').value=s.to;
+    if(typeof s.ctxBefore==='number')_ctxBefore=s.ctxBefore;
+    if(typeof s.ctxAfter==='number')_ctxAfter=s.ctxAfter;
+    var cb=document.getElementById('ctx-before');if(cb)cb.textContent=_ctxBefore;
+    var ca=document.getElementById('ctx-after');if(ca)ca.textContent=_ctxAfter;
+    if(s.ps){
+      // Per-document persists only the header/footer TEXT (the provenance). Styling is
+      // global (applied below) so an applied font/size sticks across every chat.
+      var ps=s.ps;
+      function setv(id,v){var e=document.getElementById(id);if(e&&v!=null&&v!=='')e.value=v}
+      setv('ps-hdr-text',ps.hdrText);setv('ps-ftr-text',ps.ftrText);
+    }
+  }
+  // Global page-setup styling (font/size/weight/align/distance/page-numbers) — sticks
+  // across all chats.
+  _applyGlobalPrefs();
+  // Context (before/after) only applies to search-result exports — hide the controls
+  // for a whole-conversation export where every message is already present.
+  if(!window._exportPayload){var cx=document.getElementById('ctx-controls');if(cx)cx.style.display='none'}
+  _whenImagesReady(function(){
+    if(s&&s.theme){applyTheme(s.theme)}
+    applyPageSetup(true);      // apply global + per-doc page setup (header/footer styling)
+    // If a non-zero context was saved for a search export, re-fetch it before laying out.
+    if(window._exportPayload&&(_ctxBefore>0||_ctxAfter>0)){adjustCtx('before',0);return}
+    // Default layout: 2-up when the content spans more than one page (side-by-side
+    // saves paper); 1-up for a single page. An explicit saved choice always wins.
+    var startNup;
+    if(s&&typeof s.nup==='number'){startNup=s.nup}
+    else{startNup=_paginate().length>1?2:1}
+    _curNup=startNup;
+    var nupSel=document.getElementById('nup');if(nupSel)nupSel.value=String(startNup);
+    if(s&&(s.from||s.to)){filterByDate();return}
+    applyNup(startNup);
+  });
+}
+
+document.addEventListener('DOMContentLoaded',_initLayout);
+</script>`;
+    }
+
+    function buildDocTitle(convTitle: string, msgs: any[]): string {
+      const parts = [convTitle];
+      if (msgs.length > 0) {
+        const first = new Date(msgs[0].timestamp);
+        const last = new Date(msgs[msgs.length - 1].timestamp);
+        const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        parts.push(`${fmt(first)} - ${fmt(last)}`);
+      }
+      return parts.join(' - ');
+    }
+
+    function buildFileName(convTitle: string, msgs: any[], ext: string, searchTerm?: string): string {
+      const safeName = (convTitle || 'Messages').replace(/[^a-zA-Z0-9 _-]/g, '').replace(/\s+/g, '_');
+      const parts = [safeName];
+      if (searchTerm) parts.push(searchTerm.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '_'));
+      if (msgs.length > 0) {
+        const first = new Date(msgs[0].timestamp);
+        const last = new Date(msgs[msgs.length - 1].timestamp);
+        const fmt = (d: Date) => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        parts.push(`${fmt(first)} - ${fmt(last)}`);
+      }
+      return `${parts.join(' - ')}.${ext}`;
+    }
+
+    const bodyBg = isDark ? "#0a0a0a" : "#ffffff";
+    const bodyColor = isDark ? "#ededed" : "#0a0a0a";
+    const headerBorder = isDark ? "#27272a" : "#e4e4e7";
+    const hdrTitleColor = isDark ? "#ededed" : "#0a0a0a";
+    const hdrMetaColor = isDark ? "#a1a1aa" : "#71717a";
+    const footerColor = isDark ? "#a1a1aa" : "#71717a";
+    const dateLine = isDark ? "#27272a" : "#e4e4e7";
+    const dateLabel = isDark ? "#a1a1aa" : "#65676b";
+    const senderColor = isDark ? "#a1a1aa" : "#65676b";
+    // Light grays near white read PINK on Jeremy's monitor. A COOL-biased (blue-leaning)
+    // gray reads neutral. Light mode uses a lighter cool gray; dark mode stays #303030.
+    const bubbleIn = isDark ? "#303030" : "#c4cad3";
+    const bubbleInColor = isDark ? "#ededed" : "#0a0a0a";
+    const bubbleCallBg = isDark ? "#303030" : "#c4cad3";
+    const bubbleCallColor = isDark ? "#a1a1aa" : "#4a4d52";
+    const timeColor = isDark ? "#71717a" : "#8d949e";
+    const mediaRefBg = isDark ? "#3a3500" : "#fff4cc";
+    const mediaRefColor = isDark ? "#d4b800" : "#8a6d00";
+
+    const threadBorder = isDark ? '#555' : '#bbb';
+    const UNIFIED_CSS = `*{box-sizing:border-box}
+body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;font-size:13px;margin:0 auto;padding:20px;color:#333;background:#f0f0f0}
+@media(prefers-color-scheme:dark){body{background:#1a1a1a;color:#ddd}}
+.thread-bezel{padding:0;margin:0 auto;max-width:${viewMode === "mobile" ? "412px" : viewMode === "tablet" ? "800px" : "100%"};background:transparent;border:none;border-radius:0;box-shadow:0 2px 12px rgba(0,0,0,0.3)}
+.thread{padding:16px;padding-top:20px;margin:0;border:none;border-radius:0;overflow:hidden;background:${isDark ? '#000' : '#fff'};color:${bodyColor}}
+.ct-header{display:flex;justify-content:space-between;align-items:baseline;padding:8px 12px;font-size:12px;font-weight:500;color:${isDark ? '#ccc' : '#333'};max-width:${viewMode === "mobile" ? "432px" : viewMode === "tablet" ? "820px" : "1060px"};margin:0 auto}.ct-footer{display:block;padding:6px 12px;font-size:10px;color:${isDark ? '#999' : '#555'};max-width:${viewMode === "mobile" ? "432px" : viewMode === "tablet" ? "820px" : "1060px"};margin:0 auto}.has-toolbar .ct-header{display:none}.has-toolbar .ct-footer{display:none}
+.date-sep{text-align:center;margin:20px 0 12px}.date-line{display:none}.date-label{font-size:13px;color:${dateLabel};font-weight:500;white-space:nowrap;letter-spacing:0.3px}
+.msg-row{display:flex;margin-bottom:4px;align-items:flex-end}.msg-out{justify-content:flex-end}.msg-in{justify-content:flex-start}.msg-col{max-width:70%;word-break:break-word;overflow-wrap:break-word}
+.sender-avatar{width:1.1em;height:1.1em;border-radius:50%;margin-right:0.4em;flex-shrink:0;object-fit:cover;align-self:flex-end;margin-bottom:0.1em}
+.avatar-spacer{width:1.1em;margin-right:0.4em;flex-shrink:0}
+.sender-name{font-size:12px;color:${senderColor};margin:0 0 2px 48px}
+.bubble-out{padding:10px 14px;border-radius:18px;background:linear-gradient(160deg,#2a8bff 0%,#3b6ef5 45%,#6a5cf0 100%);color:#fff}.bubble-in{padding:10px 14px;border-radius:18px;background:${bubbleIn};color:${bubbleInColor}}
+.bubble-call{display:inline-block;padding:4px 12px;border-radius:16px;background:${bubbleCallBg};color:${bubbleCallColor};font-size:12px;margin:2px auto}
+.call-row{display:flex;justify-content:center;margin-bottom:4px}
+.msg-text{font-size:15px;white-space:pre-wrap;word-break:break-word;margin:0}
+.msg-time{font-size:10px;color:${timeColor};margin:2px 0 0 12px;display:none}.msg-time-out{text-align:right;margin-right:12px;margin-left:0;display:none}
+.bates{font-size:10px;color:#999;font-family:monospace;margin-left:12px}
+.media-only img,.media-only video{max-width:100%;max-height:280px;border-radius:12px;display:block;margin-top:4px}
+img.media{max-width:100%;max-height:280px;border-radius:12px;display:block;margin-top:4px}
+video.media{max-width:100%;max-height:280px;border-radius:12px;display:block;margin-top:4px}
+audio.media{width:100%;display:block;margin:4px 0}
+.media-ref{color:${mediaRefColor};background:${mediaRefBg};padding:0 4px;border-radius:3px;font-size:11px;font-family:monospace}
+.print-toolbar{position:fixed;top:0;left:0;right:0;z-index:100;display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:8px 16px;background:rgba(20,20,20,0.95);border-bottom:1px solid #333;backdrop-filter:blur(8px)}
+.print-toolbar label{color:#ccc;font-size:12px}.print-toolbar select{padding:4px 8px;border-radius:4px;border:1px solid #555;background:#222;color:#eee;font-size:12px}
+.print-toolbar .tb-btn{padding:6px 16px;border-radius:6px;border:none;cursor:pointer;font-size:13px;font-weight:600}
+.print-toolbar .tb-print{background:#3578E5;color:#fff}.print-toolbar .tb-print:hover{background:#2d6ad4}
+.phone-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:16px;padding:16px}
+/* Phone layout table: phones in tbody rows; provenance in thead/tfoot (hidden on
+   screen, shown + repeated per page in print). */
+.phone-table{margin:0 auto;border-collapse:separate;border-spacing:16px}
+.phone-table thead,.phone-table tfoot{display:none}
+.pt-cell{vertical-align:top;text-align:center;padding:0}
+.phone-viewport{border:none;border-radius:0;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,0.3);flex-shrink:0}
+.phone-viewport *{box-sizing:border-box;max-width:100%}
+.phone-viewport .msg-row{margin-bottom:0.267em}
+.phone-viewport .msg-col{max-width:70%;word-break:break-word;overflow-wrap:break-word}
+.phone-viewport .bubble-out,.phone-viewport .bubble-in{padding:0.667em 0.933em;border-radius:1.2em;word-break:break-word;overflow-wrap:break-word}
+.phone-viewport .sender-name{font-size:0.8em;margin:0 0 0.133em 3.2em}
+.phone-viewport .msg-time{font-size:0.667em;opacity:0.7}
+.phone-viewport .msg-text{font-size:inherit}
+.phone-viewport .date-sep{margin:1.33em 0 0.8em}
+.phone-viewport .date-label{font-size:0.867em;letter-spacing:0.02em}
+.phone-viewport img.media,.phone-viewport video.media{max-width:100%;max-height:18.67em;border-radius:0.8em}
+.phone-viewport img.media{cursor:zoom-in}
+.phone-row{display:flex;justify-content:center;gap:16px;page-break-after:always;page-break-inside:avoid;padding:8px 0;margin:0 auto}
+.thread-bezel{display:flex;flex-direction:column}.thread{flex:1;min-height:0}
+.phone-chrome-top,.phone-chrome-bottom{flex-shrink:0}
+.phone-statusbar{display:flex;justify-content:space-between;align-items:center;padding:6px 16px 2px;font-size:11px;font-weight:600}
+.messenger-hdr{display:flex;align-items:center;padding:8px 12px;gap:10px}
+.mhdr-back{font-size:20px;font-weight:300;text-decoration:none}
+.mhdr-avatar{width:34px;height:34px;border-radius:50%;background:#666;flex-shrink:0}
+.mhdr-name{flex:1;font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mhdr-info{width:24px;height:24px;border-radius:50%;background:#0866ff;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;font-style:italic;flex-shrink:0}
+.phone-chrome-bottom{margin-top:auto}
+.messenger-input-bar{display:flex;align-items:center;gap:6px;padding:6px 10px}
+.mib-icon{font-size:18px}
+.mib-field{flex:1;padding:7px 12px;border-radius:20px;font-size:14px}
+.phone-navbar{display:flex;justify-content:space-around;align-items:center;padding:8px 0 6px}
+.phone-navbar span{opacity:0.4;font-size:14px}
+.nav-circle{width:14px;height:14px;border:2px solid;border-radius:50%;display:inline-block;opacity:0.4}
+@media print{
+@page{size:letter portrait;margin:0.5in 0.45in}
+body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;overflow-x:hidden}
+.print-toolbar{display:none!important}
+/* The standalone provenance is now mirrored into the phone-table's thead/tfoot. */
+.ct-header,.ct-footer,.has-toolbar .ct-header,.has-toolbar .ct-footer{display:none!important}
+.thread-bezel{display:block!important;max-width:none!important;padding:0;margin:0;box-shadow:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
+.thread{display:block!important;padding:0;margin:0;overflow:visible;max-width:none!important;background:transparent!important;zoom:1!important}
+/* The phone-table paginates as a real table: thead/tfoot REPEAT on every page and
+   RESERVE space (no overlap); tbody rows break between pages. perRow tds give the
+   column count (1 / 2 / 2) so exactly 1 / 2 / 4 phones land per page. */
+.phone-table{margin:0 auto;border-collapse:separate;border-spacing:0.22in 0.28in;width:auto}
+.phone-table thead{display:table-header-group}
+.phone-table tfoot{display:table-footer-group}
+.phone-table tbody tr{page-break-inside:avoid;break-inside:avoid}
+.pt-cell{vertical-align:top;text-align:center;padding:0;page-break-inside:avoid;break-inside:avoid}
+.pt-head{text-align:center;font-size:11px;font-weight:500;color:#000;padding:0 0 0.12in}
+.pt-foot{text-align:center;font-size:9px;color:#333;word-break:break-all;padding:0.12in 0 0}
+.phone-viewport{box-shadow:none!important}
+.phone-viewport,.phone-viewport *,.bubble-in,.bubble-out,.phone-viewport div{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
+}`;
+
     if (type === "searchResults") {
       const results: any[] = body.results || [];
       const term: string = body.query || "";
       const mc: boolean = body.matchCase === true;
       const includeContext: boolean = body.includeContext !== false;
+      // Separate before/after counts (fall back to the legacy single contextLines).
+      const legacyCtx: number = body.contextLines || 0;
+      const contextBefore: number = body.contextBefore != null ? body.contextBefore : legacyCtx;
+      const contextAfter: number = body.contextAfter != null ? body.contextAfter : legacyCtx;
+      const contextLines: number = Math.max(contextBefore, contextAfter);
+      const subFormat: string = body.subFormat || format || "html";
+      const shouldEmbedMedia: boolean = body.embedMedia === true;
+      const shouldBundleMedia: boolean = body.bundleMedia === true;
+      const originalSource: boolean = body.originalSource === true;
       const ts = (iso: string) => formatTimestamp(iso);
+      const fbTimestamp = (iso: string) => formatTimestamp(iso);
 
-      let html = `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>CourtThread Search Export</title>
-<style>
-  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 820px; margin: 0 auto; padding: 20px; color: #1a1a1a; }
-  .header { border-bottom: 2px solid #333; padding-bottom: 12px; margin-bottom: 20px; }
-  .header h1 { font-size: 18px; margin: 0; }
-  .header p { font-size: 11px; color: #666; margin: 4px 0 0; }
-  .result { border: 1px solid #ddd; border-radius: 8px; margin-bottom: 14px; overflow: hidden; page-break-inside: avoid; }
-  .result-head { background: #f0f0f0; padding: 6px 10px; font-size: 11px; color: #555; display: flex; gap: 8px; }
-  .ctx { padding: 2px 10px; font-size: 13px; line-height: 1.5; color: #555; }
-  .ctx .who { font-weight: 600; color: #333; }
-  .ctx .t { color: #999; font-size: 11px; margin-left: 6px; }
-  .ctx.match { background: #fff8e1; border-left: 3px solid #f5a623; }
-  mark { background: #ffe58a; padding: 0 2px; border-radius: 2px; }
-  .provenance { border-top: 2px solid #333; margin-top: 24px; padding-top: 12px; font-size: 10px; color: #666; }
-</style></head><body>
-<div class="header">
-  <h1>Court Evidence — Search Results Export</h1>
-  <p>Generated: ${new Date().toLocaleString()}</p>
-  ${term ? `<p>Search term: ${escapeHtml(term)}</p>` : ""}
-  <p>Results: ${results.length}</p>
-</div>
-`;
-      for (const r of results) {
-        html += `<div class="result">`;
-        html += `<div class="result-head"><span>${escapeHtml(r.platform || "")}</span><span>${escapeHtml(r.conversation_title || "Untitled")}</span><span>${ts(r.timestamp)}</span></div>`;
-        const ctxList = includeContext && Array.isArray(r.context) && r.context.length > 1
-          ? r.context
-          : [{ id: r.id, content: r.content, sender_name: r.sender_name, timestamp: r.timestamp }];
-        for (const c of ctxList) {
-          const isMatch = c.id === r.id;
-          const body = isMatch
-            ? escapeAndHighlight(c.content || "[media]", term, mc)
-            : escapeHtml(c.content || "[media]");
-          html += `<div class="ctx${isMatch ? " match" : ""}"><span class="who">${escapeHtml(c.sender_name || "Unknown")}</span><span class="t">${ts(c.timestamp)}</span><div>${body}</div></div>`;
+      if (contextBefore > 0 || contextAfter > 0) {
+        for (const r of results) {
+          if (!r.conversation_id && !r.source_id) continue;
+          try {
+            const safeId = String(r.id).replace(/'/g, "''");
+            // Use the numeric timestamp_ms column for ordering/bounds — string timestamp
+            // comparisons are fragile across formats. Fall back to a computed epoch.
+            const tms = r.timestamp_ms != null ? Number(r.timestamp_ms) : new Date(r.timestamp).getTime();
+            // sender_name is NOT a column on messages — it comes from participants.
+            // (The previous query selected it directly and threw, which the catch
+            // silently swallowed → empty context. Join participants like the search API.)
+            const convClause = `m.conversation_id = (SELECT conversation_id FROM messages WHERE id = '${safeId}')`;
+            const sel = `SELECT m.id, m.content, p.display_name as sender_name, m.timestamp, m.is_incoming, m.source_id, m.metadata, m.message_type FROM messages m LEFT JOIN participants p ON m.sender_id = p.id`;
+            // "before" includes the hit itself (<=), so +1; "after" is strictly later.
+            const before = db.exec(`${sel} WHERE ${convClause} AND m.timestamp_ms <= ${tms} ORDER BY m.timestamp_ms DESC LIMIT ${contextBefore + 1}`);
+            const after = db.exec(`${sel} WHERE ${convClause} AND m.timestamp_ms > ${tms} ORDER BY m.timestamp_ms ASC LIMIT ${contextAfter}`);
+            const ctx: any[] = [];
+            const addRows = (rows: any) => { if (!rows[0]?.values) return; for (const v of rows[0].values) { ctx.push({ id: v[0], content: v[1], sender_name: v[2], timestamp: v[3], is_incoming: v[4], source_id: v[5], metadata: v[6], message_type: v[7] }); } };
+            addRows(before);
+            addRows(after);
+            ctx.sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+            r.context = ctx;
+          } catch { /* skip */ }
         }
-        html += `</div>\n`;
       }
-      html += `
-<div class="provenance">
-  <p>Extracted using CourtThread&trade; ${new Date().getFullYear()}</p>
-  <p>Export date: ${new Date().toISOString()}</p>
-  <p>This document was generated from electronic records imported into CourtThread for the purpose of litigation.</p>
-</div></body></html>`;
 
+      function flattenMessages(results: any[]): any[] {
+        const seen = new Set<string>();
+        const msgs: any[] = [];
+        for (const r of results) {
+          const ctxList = includeContext && Array.isArray(r.context) && r.context.length > 1
+            ? r.context : [r];
+          for (const c of ctxList) {
+            if (seen.has(c.id)) continue;
+            seen.add(c.id);
+            msgs.push({ ...c, isMatch: c.id === r.id, conversation_title: r.conversation_title });
+          }
+        }
+        msgs.sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        return msgs;
+      }
+
+      const srcDirCache = new Map<string, string | null>();
+
+      function resolveSourceDir(sourceId: string): string | null {
+        if (!sourceId) return null;
+        if (srcDirCache.has(sourceId)) return srcDirCache.get(sourceId)!;
+        const safeId = String(sourceId).replace(/'/g, "''");
+        try {
+          const r = db.exec(`SELECT file_path, metadata FROM sources WHERE id = '${safeId}'`);
+          const fp = r[0]?.values[0]?.[0] as string | undefined;
+          const metadataStr = r[0]?.values[0]?.[1] as string | undefined;
+          if (!fp) { srcDirCache.set(sourceId, null); return null; }
+
+          if (metadataStr) {
+            try {
+              const meta = JSON.parse(metadataStr);
+              if (meta.localMediaPath) {
+                try {
+                  const dir = fs.statSync(meta.localMediaPath).isDirectory()
+                    ? meta.localMediaPath : path.dirname(meta.localMediaPath);
+                  srcDirCache.set(sourceId, dir);
+                  return dir;
+                } catch {}
+              }
+            } catch {}
+          }
+
+          if (fp.startsWith("upload://")) {
+            const convResult = db.exec(
+              `SELECT DISTINCT s.file_path FROM conversations c
+               JOIN conversations c2 ON c.title = c2.title AND c.platform = c2.platform
+               JOIN sources s ON c2.source_id = s.id
+               WHERE c.source_id = '${safeId}'
+                 AND s.file_path NOT LIKE 'upload://%'
+               LIMIT 1`
+            );
+            const fallback = convResult[0]?.values[0]?.[0] as string | undefined;
+            if (fallback) {
+              try {
+                const dir = fs.statSync(fallback).isDirectory() ? fallback : path.dirname(fallback);
+                srcDirCache.set(sourceId, dir);
+                return dir;
+              } catch {}
+            }
+            const uploadRel = fp.replace("upload://", "");
+            const folderName = uploadRel.split(/[/\\]/)[0];
+            if (folderName) {
+              const allSources = db.exec(`SELECT file_path FROM sources WHERE file_path NOT LIKE 'upload://%'`);
+              for (const row of (allSources[0]?.values || [])) {
+                const sp = row[0] as string;
+                try {
+                  const spDir = fs.statSync(sp).isDirectory() ? sp : path.dirname(sp);
+                  if (path.basename(spDir) === folderName) { srcDirCache.set(sourceId, spDir); return spDir; }
+                  const candidate = path.join(path.dirname(spDir), folderName);
+                  if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) { srcDirCache.set(sourceId, candidate); return candidate; }
+                } catch {}
+              }
+            }
+          } else if (fs.existsSync(fp)) {
+            const dir = fs.statSync(fp).isDirectory() ? fp : path.dirname(fp);
+            srcDirCache.set(sourceId, dir);
+            return dir;
+          }
+        } catch {}
+        srcDirCache.set(sourceId, null);
+        return null;
+      }
+
+      function getMimeType(filename: string): string {
+        const ext = (filename.split('.').pop() || '').toLowerCase();
+        const map: Record<string, string> = {
+          jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+          webp: 'image/webp', svg: 'image/svg+xml', mp4: 'video/mp4', webm: 'video/webm',
+          mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+        };
+        return map[ext] || 'application/octet-stream';
+      }
+
+      function mediaToDataUri(sourceId: string, filename: string, mediaType: string): string | null {
+        const dir = resolveSourceDir(sourceId);
+        if (!dir) return null;
+        const diskPath = resolveMediaPath(dir, filename, mediaType);
+        if (!diskPath) return null;
+        try {
+          const buf = fs.readFileSync(diskPath);
+          return `data:${getMimeType(filename)};base64,${buf.toString('base64')}`;
+        } catch { return null; }
+      }
+
+      // (shared functions moved to top level above)
+
+      function buildFbHeader(convTitle: string, allMsgs: any[]): string {
+        const sourceIds = [...new Set(allMsgs.map((m: any) => m.source_id).filter(Boolean))];
+        const info = lookupSourceInfo(sourceIds);
+        return buildUnifiedHeader(convTitle, allMsgs.length, allMsgs, info);
+      }
+
+      function buildFbFooter(allMsgs: any[]): string {
+        const sourceIds = [...new Set(allMsgs.map((m: any) => m.source_id).filter(Boolean))];
+        const info = lookupSourceInfo(sourceIds);
+        return buildUnifiedFooter(info);
+      }
+
+      function renderMediaForFbFormat(metadata: string | null, sourceId: string, embed: boolean, mhtmlMode: boolean): string {
+        const refs = getMediaRefs(metadata);
+        if (refs.length === 0) return '';
+        const parts: string[] = [];
+        for (const mm of refs) {
+          if (mm.filename) {
+            if (embed) {
+              const dataUri = mediaToDataUri(sourceId, mm.filename, mm.type);
+              if (dataUri) {
+                if (mm.type === 'image' || mm.type === 'sticker' || mm.type === 'gif') {
+                  parts.push(`<a target="_blank" href="${dataUri}"><img src="${dataUri}" class="_a6_o _3-96" /></a>`);
+                } else if (mm.type === 'video') {
+                  parts.push(`<video class="_a6_o _3-96" controls src="${dataUri}"></video>`);
+                } else if (mm.type === 'audio') {
+                  parts.push(`<audio style="width:100%;display:block;margin:4px 0;" controls src="${dataUri}"></audio>`);
+                }
+                continue;
+              }
+            } else if (mhtmlMode) {
+              if (mm.type === 'image' || mm.type === 'sticker' || mm.type === 'gif') {
+                parts.push(`<a target="_blank" href="${escapeHtml(mm.filename)}"><img src="${escapeHtml(mm.filename)}" class="_a6_o _3-96" /></a>`);
+              } else if (mm.type === 'video') {
+                parts.push(`<video class="_a6_o _3-96" controls src="${escapeHtml(mm.filename)}"></video>`);
+              } else if (mm.type === 'audio') {
+                parts.push(`<audio style="width:100%;display:block;margin:4px 0;" controls src="${escapeHtml(mm.filename)}"></audio>`);
+              }
+              continue;
+            }
+          }
+          parts.push(`<div style="color:#8d949e;font-size:11px;padding:4px 0;">[${escapeHtml(mm.type)}${mm.filename ? ': ' + escapeHtml(mm.filename) : ''}]</div>`);
+        }
+        return parts.join('');
+      }
+
+      function renderMediaForBundle(metadata: string | null, sourceId: string, bundledFiles: Map<string, string>): string {
+        const refs = getMediaRefs(metadata);
+        if (refs.length === 0) return '';
+        const parts: string[] = [];
+        for (const mm of refs) {
+          if (mm.filename) {
+            const dir = resolveSourceDir(sourceId);
+            if (dir) {
+              const diskPath = resolveMediaPath(dir, mm.filename, mm.type);
+              if (diskPath) {
+                const zipName = `media/${mm.filename}`;
+                bundledFiles.set(zipName, diskPath);
+                if (mm.type === 'image' || mm.type === 'sticker' || mm.type === 'gif') {
+                  parts.push(`<a target="_blank" href="${zipName}"><img src="${zipName}" class="_a6_o _3-96" /></a>`);
+                } else if (mm.type === 'video') {
+                  parts.push(`<video class="_a6_o _3-96" controls src="${zipName}"></video>`);
+                } else if (mm.type === 'audio') {
+                  parts.push(`<audio style="width:100%;display:block;margin:4px 0;" controls src="${zipName}"></audio>`);
+                }
+                continue;
+              }
+            }
+          }
+          parts.push(`<div style="color:#8d949e;font-size:11px;padding:4px 0;">[${escapeHtml(mm.type)}${mm.filename ? ': ' + escapeHtml(mm.filename) : ''}]</div>`);
+        }
+        return parts.join('');
+      }
+
+      function buildBubbleMessagesHtml(allMsgs: any[], embedMedia: boolean, mhtmlMode: boolean, bundledFiles?: Map<string, string>): string {
+        let html = '';
+        let pSender = '';
+        let pTime = 0;
+        for (const m of allMsgs) {
+          const isOut = !m.is_incoming;
+          const curSender = m.sender_name || 'Unknown';
+          const curTime = new Date(m.timestamp).getTime();
+          const curDay = new Date(m.timestamp).toDateString();
+          const prevDay = pTime ? new Date(pTime).toDateString() : '';
+          const showHeader = (curTime - pTime > 300000) || curDay !== prevDay || pTime === 0;
+          const showSender = !isOut && (curSender !== pSender || showHeader);
+          const content = escapeHtml(m.content || '');
+          let mediaHtml: string;
+          if (bundledFiles) {
+            mediaHtml = renderMediaForBundle(m.metadata, m.source_id, bundledFiles);
+          } else {
+            mediaHtml = renderMediaForFbFormat(m.metadata, m.source_id, embedMedia, mhtmlMode);
+          }
+
+          const hasOnlyMedia = !content && mediaHtml;
+          const bubbleClass = isOut ? 'bubble-out' : 'bubble-in';
+
+          if (showHeader) html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${fbTimestamp(m.timestamp)}</span></div>`;
+          if (showSender) html += `<p class="sender-name">${escapeHtml(curSender)}</p>`;
+          html += `<div>`;
+          html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
+          html += `<div class="msg-col">`;
+          if (hasOnlyMedia) {
+            html += `<div class="media-only">${mediaHtml}</div>`;
+          } else {
+            html += `<div class="${bubbleClass}">`;
+            if (content) html += `<p class="msg-text">${content}</p>`;
+            if (mediaHtml) html += mediaHtml;
+            html += `</div>`;
+          }
+          html += `</div></div></div>\n`;
+          pSender = curSender;
+          pTime = curTime;
+        }
+        return html;
+      }
+
+      // Search-results PRINT path — must match the conversation blob exactly:
+      // no sender name (1-on-1 chat), avatar beside the LAST incoming message of a
+      // group, 20-min/new-day timestamp grouping, and class="media" so the
+      // phone-viewport scaling CSS applies (photos shrink proportionally with n-up).
+      function buildBubblePrintHtml(allMsgs: any[]): string {
+        let html = '';
+        let pTime = 0;
+        for (let mi = 0; mi < allMsgs.length; mi++) {
+          const m = allMsgs[mi];
+          const isOut = !m.is_incoming;
+          const curSender = m.sender_name || 'Unknown';
+          const curTime = new Date(m.timestamp).getTime();
+          const curDay = new Date(m.timestamp).toDateString();
+          const prevDay = pTime ? new Date(pTime).toDateString() : '';
+          const showHeader = (curTime - pTime > 1800000) || curDay !== prevDay || pTime === 0;
+          const nextMsg = mi + 1 < allMsgs.length ? allMsgs[mi + 1] : null;
+          const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1800000));
+          const content = escapeHtml(m.content || '');
+          const refs = getMediaRefs(m.metadata);
+          let mediaHtml = '';
+          for (const mm of refs) {
+            if (mm.filename) {
+              const url = `/api/media?sourceId=${encodeURIComponent(m.source_id)}&filename=${encodeURIComponent(mm.filename)}&type=${encodeURIComponent(mm.type)}`;
+              if (mm.type === 'image' || mm.type === 'sticker' || mm.type === 'gif') {
+                mediaHtml += `<img class="media" src="${url}" />`;
+              } else if (mm.type === 'video') {
+                mediaHtml += `<video class="media" controls src="${url}"></video>`;
+              } else if (mm.type === 'audio') {
+                mediaHtml += `<audio class="media" controls src="${url}"></audio>`;
+              }
+            }
+          }
+
+          const hasOnlyMedia = !content && mediaHtml;
+          const bubbleClass = isOut ? 'bubble-out' : 'bubble-in';
+
+          if (showHeader) html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${fbTimestamp(m.timestamp)}</span></div>`;
+          html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
+          if (!isOut && isLastInGroup) {
+            html += `<img class="sender-avatar" src="/phone-chrome/profile.png" alt="" onerror="this.style.display='none'">`;
+          } else if (!isOut) {
+            html += `<div class="avatar-spacer"></div>`;
+          }
+          html += `<div class="msg-col">`;
+          if (hasOnlyMedia) {
+            html += `<div class="media-only">${mediaHtml}</div>`;
+          } else {
+            html += `<div class="${bubbleClass}">`;
+            if (content) html += `<p class="msg-text">${content}</p>`;
+            if (mediaHtml) html += mediaHtml;
+            html += `</div>`;
+          }
+          html += `</div></div>\n`;
+          pTime = curTime;
+        }
+        return html;
+      }
+
+
+
+      function buildFullFbHtml(allMsgs: any[], embedMedia: boolean, mhtmlMode: boolean, bundledFiles?: Map<string, string>): string {
+        const convTitle = results[0]?.conversation_title || 'Messages';
+        const pageTitle = buildDocTitle(convTitle, allMsgs);
+
+        let html = `<!DOCTYPE html><html><head>`;
+        html += `<meta charset="utf-8" />\n`;
+        html += `<style>${UNIFIED_CSS}</style>\n`;
+        html += `<title>${escapeHtml(pageTitle)}</title>`;
+        html += `</head><body>`;
+        html += buildFbHeader(convTitle, allMsgs);
+        html += `<div class="thread-bezel">`;
+        html += buildPhoneChromeTop(convTitle, isDark);
+        html += `<div class="thread">`;
+        html += buildBubbleMessagesHtml(allMsgs, embedMedia, mhtmlMode, bundledFiles);
+        html += `</div>`;
+        html += buildPhoneChromeBottom(isDark);
+        html += `</div>`;
+        html += buildFbFooter(allMsgs);
+        html += `</body></html>`;
+        return html;
+      }
+
+      // --- CSV FORMAT ---
+      if (subFormat === "csv") {
+        const allMsgs = flattenMessages(results);
+        const header = "Timestamp,Sender,Content,Media,Platform,Conversation\n";
+        const rows = allMsgs.map((m: any) => {
+          const content = (m.content || '').replace(/"/g, '""').replace(/\n/g, ' ');
+          const media = mediaLabel(getMediaRefs(m.metadata)).replace(/"/g, '""');
+          return `"${ts(m.timestamp)}","${(m.sender_name || '').replace(/"/g, '""')}","${content}","${media}","${m.platform || ''}","${(m.conversation_title || '').replace(/"/g, '""')}"`;
+        }).join('\n');
+        const csvName = buildFileName(results[0]?.conversation_title || 'Search_Results', allMsgs, 'csv', term);
+        return new Response(header + rows, {
+          headers: { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": `attachment; filename="${csvName}"` },
+        });
+      }
+
+      // --- PLAIN TEXT FORMAT ---
+      if (subFormat === "txt") {
+        const allMsgs = flattenMessages(results);
+        let output = `${results[0]?.conversation_title || 'Messages'}\n`;
+        output += `Generated: ${new Date().toISOString()}\n`;
+        if (term) output += `Search term: ${term}\n`;
+        output += `Results: ${results.length}\n`;
+        output += "=".repeat(60) + "\n\n";
+        for (const m of allMsgs) {
+          const mediaRefs = getMediaRefs(m.metadata);
+          const mediaStr = mediaRefs.length ? " " + mediaLabel(mediaRefs) : "";
+          output += `[${ts(m.timestamp)}] ${m.sender_name || "Unknown"}: ${m.content || "[media]"}${mediaStr}\n`;
+        }
+        const txtName = buildFileName(results[0]?.conversation_title || 'Search_Results', allMsgs, 'txt', term);
+        return new Response(output, {
+          headers: { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": `attachment; filename="${txtName}"` },
+        });
+      }
+
+      // --- PRINT FORMAT (media via /api/media URLs for browser rendering) ---
+      if (subFormat === "print") {
+        const allMsgs = flattenMessages(results);
+        const convTitle = results[0]?.conversation_title || 'Messages';
+        const pageTitle = buildDocTitle(convTitle, allMsgs);
+
+        let html = `<!DOCTYPE html><html><head><meta charset="utf-8">`;
+        html += `<style>${UNIFIED_CSS}</style>`;
+        html += `<title>${escapeHtml(pageTitle)}</title>`;
+        html += `</head><body class="nup-1 has-toolbar" style="padding-top:48px">`;
+        html += buildPrintToolbar(convTitle);
+        html += buildFbHeader(convTitle, allMsgs);
+        html += `<div class="thread-bezel">`;
+        html += buildPhoneChromeTop(convTitle, isDark);
+        html += `<div class="thread">`;
+        html += buildBubblePrintHtml(allMsgs);
+        html += `</div>`;
+        html += buildPhoneChromeBottom(isDark);
+        html += `</div>`;
+        html += buildFbFooter(allMsgs);
+        const exportPayload = { type: body.type, format: body.format, subFormat: body.subFormat, query: body.query, matchCase: body.matchCase, includeTimestamps, includeProvenance: body.includeProvenance, includeContext: true, viewMode, theme: themeMode, results: body.results, contextBefore: body.contextBefore || 0, contextAfter: body.contextAfter || 0, inlineMedia: body.inlineMedia };
+        html += `<script>window._exportPayload=${JSON.stringify(exportPayload).replace(/<\//g, '<\\/')}<\/script>`;
+        html += `</body></html>`;
+        return new Response(html, {
+          headers: { "Content-Type": "text/html; charset=utf-8" },
+        });
+      }
+
+      // --- ORIGINAL SOURCE HTML FORMAT (Facebook-style, no embedded media) ---
+      if (originalSource) {
+        const allMsgs = flattenMessages(results);
+        const html = buildFullFbHtml(allMsgs, false, false);
+        return new Response(html, {
+          headers: { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": `attachment; filename="${buildFileName(results[0]?.conversation_title || 'Messages', allMsgs, 'html', term)}"` },
+        });
+      }
+
+      // --- HTML FORMATS (standalone / ZIP / MHTML) ---
+      const allMsgs = flattenMessages(results);
+
+      // --- MHTML FORMAT ---
+      if (subFormat === "mhtml") {
+        const html = buildFullFbHtml(allMsgs, false, true);
+        const boundary = '----=_NextPart_' + Date.now().toString(36);
+        let mhtml = `MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary="${boundary}"\r\n\r\n`;
+        mhtml += `--${boundary}\r\nContent-Type: text/html; charset="utf-8"\r\nContent-Location: exhibit.html\r\n\r\n`;
+        mhtml += html + '\r\n';
+
+        const embeddedFiles = new Set<string>();
+        for (const m of allMsgs) {
+          for (const mm of getMediaRefs(m.metadata)) {
+            if (!mm.filename || embeddedFiles.has(mm.filename)) continue;
+            const dir = resolveSourceDir(m.source_id);
+            if (!dir) continue;
+            const diskPath = resolveMediaPath(dir, mm.filename, mm.type);
+            if (!diskPath) continue;
+            try {
+              const buf = fs.readFileSync(diskPath);
+              embeddedFiles.add(mm.filename);
+              mhtml += `--${boundary}\r\nContent-Type: ${getMimeType(mm.filename)}\r\nContent-Transfer-Encoding: base64\r\nContent-Location: ${mm.filename}\r\n\r\n`;
+              const b64 = buf.toString('base64');
+              for (let i = 0; i < b64.length; i += 76) {
+                mhtml += b64.substring(i, i + 76) + '\r\n';
+              }
+            } catch {}
+          }
+        }
+        mhtml += `--${boundary}--\r\n`;
+
+        return new Response(mhtml, {
+          headers: {
+            "Content-Type": "message/rfc822",
+            "Content-Disposition": `attachment; filename="${buildFileName(results[0]?.conversation_title || 'Messages', allMsgs, 'mhtml', term)}"`,
+          },
+        });
+      }
+
+      // --- ZIP FORMAT (HTML + media folder) ---
+      if (shouldBundleMedia) {
+        const bundledFiles = new Map<string, string>();
+        const html = buildFullFbHtml(allMsgs, false, false, bundledFiles);
+        if (bundledFiles.size > 0) {
+          const zip = new AdmZip();
+          zip.addFile("exhibit.html", Buffer.from(html, "utf-8"));
+          for (const [zipName, diskPath] of bundledFiles) {
+            try { zip.addFile(zipName, fs.readFileSync(diskPath)); } catch {}
+          }
+          return new Response(new Uint8Array(zip.toBuffer()), {
+            headers: { "Content-Type": "application/zip", "Content-Disposition": `attachment; filename="${buildFileName(results[0]?.conversation_title || 'Messages', allMsgs, 'zip', term)}"` },
+          });
+        }
+        return new Response(html, {
+          headers: { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": `attachment; filename="${buildFileName(results[0]?.conversation_title || 'Messages', allMsgs, 'html', term)}"` },
+        });
+      }
+
+      // --- STANDALONE HTML (default, with embedded media as data URIs) ---
+      const html = buildFullFbHtml(allMsgs, true, false);
       return new Response(html, {
-        headers: {
-          "Content-Type": "text/html; charset=utf-8",
-          "Content-Disposition": `attachment; filename="CourtThread_Search_Export.html"`,
-        },
+        headers: { "Content-Type": "text/html; charset=utf-8", "Content-Disposition": `attachment; filename="${buildFileName(results[0]?.conversation_title || 'Messages', allMsgs, 'html', term)}"` },
       });
     }
 
-    const db = await getDb();
     let messages: any[] = [];
 
     if (type === "bookmarks") {
@@ -212,6 +1423,8 @@ export async function POST(request: NextRequest) {
     }
 
     let batesCounter = batesStart || 1;
+    const convTitles = [...new Set(messages.map(m => m.conversation_title || "Untitled").filter(Boolean))];
+    const headerTitle = convTitles.length === 1 ? convTitles[0] : `${convTitles.length} Conversations`;
 
     if (format === "csv") {
       const header = includeMedia
@@ -231,7 +1444,7 @@ export async function POST(request: NextRequest) {
       return new Response(header + rows, {
         headers: {
           "Content-Type": "text/csv; charset=utf-8",
-          "Content-Disposition": `attachment; filename="CourtThread_Export.csv"`,
+          "Content-Disposition": `attachment; filename="${buildFileName(headerTitle, messages, 'csv')}"`,
         },
       });
     }
@@ -267,24 +1480,40 @@ export async function POST(request: NextRequest) {
       return new Response(output, {
         headers: {
           "Content-Type": "text/plain; charset=utf-8",
-          "Content-Disposition": `attachment; filename="CourtThread_Export.txt"`,
+          "Content-Disposition": `attachment; filename="${buildFileName(headerTitle, messages, 'txt')}"`,
         },
       });
     }
 
-    // For media embedding: map each source to its on-disk directory (skip upload:// sources).
+    // For media embedding: map each source to its on-disk directory.
     const sourceDirs = new Map<string, string | null>();
-    if (embedMedia || inlineMedia) {
+    if (embedMedia || inlineMedia || bundleMedia || subFormat === "mhtml") {
       const srcIds = Array.from(new Set(messages.map((m) => m.source_id).filter(Boolean)));
       for (const sid of srcIds) {
         try {
-          const r = db.exec(`SELECT file_path FROM sources WHERE id = '${String(sid).replace(/'/g, "''")}'`);
+          const r = db.exec(`SELECT file_path, metadata FROM sources WHERE id = '${String(sid).replace(/'/g, "''")}'`);
           const fp = r[0]?.values[0]?.[0] as string | undefined;
-          if (fp && !fp.startsWith("upload://") && fs.existsSync(fp)) {
-            sourceDirs.set(sid, fs.statSync(fp).isDirectory() ? fp : path.dirname(fp));
-          } else {
-            sourceDirs.set(sid, null);
+          const metaStr = r[0]?.values[0]?.[1] as string | undefined;
+          let resolved: string | null = null;
+          if (metaStr) {
+            try {
+              const meta = JSON.parse(metaStr);
+              if (meta.localMediaPath) {
+                try {
+                  resolved = fs.statSync(meta.localMediaPath).isDirectory()
+                    ? meta.localMediaPath : path.dirname(meta.localMediaPath);
+                } catch {}
+              }
+            } catch {}
           }
+          if (!resolved && fp && !fp.startsWith("upload://")) {
+            try {
+              if (fs.existsSync(fp)) {
+                resolved = fs.statSync(fp).isDirectory() ? fp : path.dirname(fp);
+              }
+            } catch {}
+          }
+          sourceDirs.set(sid, resolved);
         } catch { sourceDirs.set(sid, null); }
       }
     }
@@ -292,150 +1521,235 @@ export async function POST(request: NextRequest) {
     const bundledMedia = new Map<string, string>();
     let mediaMissing = 0;
 
-    // HTML format (default)
-    let html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>CourtThread Evidence Export</title>
-<style>
-  body { font-family: 'Segoe UI', system-ui, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; color: #1a1a1a; }
-  .header { border-bottom: 2px solid #333; padding-bottom: 12px; margin-bottom: 20px; }
-  .header h1 { font-size: 18px; margin: 0; }
-  .header p { font-size: 11px; color: #666; margin: 4px 0 0; }
-  .conversation-header { background: #f0f0f0; padding: 8px 12px; margin: 16px 0 8px; border-left: 3px solid #333; font-weight: 600; font-size: 13px; }
-  .message { padding: 4px 0; font-size: 13px; line-height: 1.5; page-break-inside: avoid; }
-  .message .bates { color: #999; font-size: 10px; font-family: monospace; margin-right: 4px; }
-  .message .time { color: #888; font-size: 11px; }
-  .message .sender { font-weight: 600; }
-  .message .incoming .sender { color: #333; }
-  .message .outgoing .sender { color: #0066cc; }
-  .message .content { margin-left: 8px; }
-  .message .media-ref { color: #8a6d00; background: #fff4cc; padding: 0 4px; border-radius: 3px; font-size: 11px; font-family: monospace; }
-  .message img.media { max-width: 320px; max-height: 320px; display: block; margin: 4px 0 4px 8px; border: 1px solid #ddd; }
-  .message video.media, .message audio.media { max-width: 320px; display: block; margin: 4px 0 4px 8px; }
-  .provenance { border-top: 2px solid #333; margin-top: 30px; padding-top: 12px; font-size: 10px; color: #666; }
-  @media print { body { font-size: 11px; } .message { font-size: 11px; } }
-</style>
-</head>
-<body>
-<div class="header">
-  <h1>Court Evidence — Message Export</h1>
-  <p>Generated: ${new Date().toLocaleString()}</p>
-  <p>Total messages: ${messages.length}</p>
-</div>
-`;
+    // BUBBLE_CSS replaced by UNIFIED_CSS (defined above)
+
+    const convSourceIds = [...new Set(messages.map(m => m.source_id).filter(Boolean))];
+    const convInfo = lookupSourceInfo(convSourceIds);
+
+    const pageTitle = buildDocTitle(headerTitle, messages);
+
+    let html = `<!DOCTYPE html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<title>${escapeHtml(pageTitle)}</title>\n<style>${UNIFIED_CSS}</style>\n</head>\n<body class="nup-1${inlineMedia ? ' has-toolbar' : ''}"${inlineMedia ? ' style="padding-top:48px"' : ''}>\n`;
+    if (inlineMedia) {
+      html += buildPrintToolbar(headerTitle);
+    }
+    html += buildUnifiedHeader(headerTitle, messages.length, messages, convInfo);
+    html += `<div class="thread-bezel">`;
+    html += buildPhoneChromeTop(headerTitle, isDark);
+    html += `<div class="thread">\n`;
 
     let currentConv = "";
-    for (const m of messages) {
+    let lastDate = "";
+    let prevSender = "";
+    let prevTime = 0;
+    for (let mi = 0; mi < messages.length; mi++) {
+      const m = messages[mi];
       if (m.conversation_title !== currentConv) {
         currentConv = m.conversation_title || "Untitled";
-        html += `<div class="conversation-header">${escapeHtml(currentConv)} (${escapeHtml(m.conv_platform || m.platform)})</div>\n`;
+        lastDate = "";
+        prevSender = "";
+        prevTime = 0;
+        if (convTitles.length > 1) {
+          html += `<div class="ct-hdr-row" style="margin-top:24px;padding-top:12px;border-top:1px solid #dadde1"><div class="ct-hdr-icon"><svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.04 2 11c0 2.83 1.4 5.35 3.59 7.01V22l3.6-1.98c.96.27 1.98.41 3.01.41 5.52 0 10-4.04 10-9S17.52 2 12 2z"/></svg></div><div><div class="ct-hdr-title">${escapeHtml(currentConv)}</div><div class="ct-hdr-meta">${escapeHtml(m.conv_platform || m.platform)}</div></div></div>\n`;
+        }
       }
 
-      const bates = includeBatesNumbers
-        ? `<span class="bates">${batesPrefix}-${(batesCounter++).toString().padStart(4, "0")}</span>`
-        : "";
-      const ts = includeTimestamps
-        ? `<span class="time">[${formatTimestamp(m.timestamp)}]</span> `
-        : "";
-      const direction = m.is_incoming ? "incoming" : "outgoing";
+      const msgDate = new Date(m.timestamp).toDateString();
+      if (msgDate !== lastDate) {
+        lastDate = msgDate;
+        prevSender = "";
+        prevTime = 0;
+      }
+
+      const isOut = !m.is_incoming;
+      const isCall = m.message_type === "call";
+      const isSystem = m.message_type === "system";
       const mediaRefs = includeMedia ? getMediaRefs(m.metadata) : [];
-      const baseContent = m.content || (mediaRefs.length ? "" : "[media]");
-      let content = escapeHtml(baseContent);
-      if (mediaRefs.length) {
-        const parts: string[] = [];
+      const batesLabel = includeBatesNumbers ? `<span class="bates">${batesPrefix}-${(batesCounter++).toString().padStart(4, "0")}</span>` : "";
+
+      if (isCall || isSystem) {
+        // Messenger shows call/system events as a subtle centered line — no sender
+        // prefix, no inline timestamp (that comes from the group header above).
+        html += `<div class="call-row" data-ts="${m.timestamp}"><span class="bubble-call">${escapeHtml(m.content || 'Call')}${batesLabel}</span></div>\n`;
+        continue;
+      }
+
+      let mediaHtml = '';
+      if (mediaRefs.length > 0) {
         for (const mm of mediaRefs) {
           let embedded = false;
-          if (embedMedia && mm.filename) {
+          if ((embedMedia || bundleMedia || subFormat === "mhtml") && mm.filename) {
             const dir = sourceDirs.get(m.source_id);
             if (dir) {
               const diskPath = resolveMediaPath(dir, mm.filename, mm.type);
               if (diskPath) {
                 const zipName = `media/${mm.filename}`;
                 bundledMedia.set(zipName, diskPath);
-                if (mm.type === "image" || mm.type === "sticker" || mm.type === "gif") {
-                  parts.push(`<img class="media" src="${zipName}" alt="${escapeHtml(mm.filename)}">`);
-                } else if (mm.type === "video") {
-                  parts.push(`<video class="media" controls src="${zipName}"></video>`);
-                } else if (mm.type === "audio") {
-                  parts.push(`<audio class="media" controls src="${zipName}"></audio>`);
-                } else {
-                  parts.push(`<a href="${zipName}">${escapeHtml(mm.filename)}</a>`);
+                const src = subFormat === "mhtml" ? mm.filename : zipName;
+                if (mm.type === 'image' || mm.type === 'sticker' || mm.type === 'gif') {
+                  mediaHtml += `<img class="media" src="${src}" alt="${escapeHtml(mm.filename)}">`;
+                } else if (mm.type === 'video') {
+                  mediaHtml += `<video class="media" controls src="${src}"></video>`;
+                } else if (mm.type === 'audio') {
+                  mediaHtml += `<audio class="media" controls src="${src}"></audio>`;
                 }
                 embedded = true;
-              } else {
-                mediaMissing++;
-              }
+              } else { mediaMissing++; }
             }
           }
-          // Print/PDF: reference the live media endpoint so images render inline
-          // (works for folder-imported sources; the dev server serves the file).
           if (!embedded && inlineMedia && mm.filename) {
             const dir = sourceDirs.get(m.source_id);
             if (dir && resolveMediaPath(dir, mm.filename, mm.type)) {
               const src = `/api/media?sourceId=${encodeURIComponent(m.source_id)}&filename=${encodeURIComponent(mm.filename)}&type=${encodeURIComponent(mm.type)}`;
-              if (mm.type === "image" || mm.type === "sticker" || mm.type === "gif") {
-                parts.push(`<img class="media" src="${src}" alt="${escapeHtml(mm.filename)}">`);
-              } else if (mm.type === "video") {
-                parts.push(`<video class="media" controls src="${src}"></video>`);
-              } else if (mm.type === "audio") {
-                parts.push(`<audio class="media" controls src="${src}"></audio>`);
-              } else {
-                parts.push(`<a href="${src}">${escapeHtml(mm.filename)}</a>`);
+              if (mm.type === 'image' || mm.type === 'sticker' || mm.type === 'gif') {
+                mediaHtml += `<img class="media" src="${src}" alt="${escapeHtml(mm.filename)}">`;
+              } else if (mm.type === 'video') {
+                mediaHtml += `<video class="media" controls src="${src}"></video>`;
+              } else if (mm.type === 'audio') {
+                mediaHtml += `<audio class="media" controls src="${src}"></audio>`;
               }
               embedded = true;
             }
           }
           if (!embedded) {
-            parts.push(`<span class="media-ref">[${escapeHtml(mm.type)}${mm.filename ? ": " + escapeHtml(mm.filename) : ""}]</span>`);
+            mediaHtml += `<span class="media-ref">[${escapeHtml(mm.type)}${mm.filename ? ': ' + escapeHtml(mm.filename) : ''}]</span> `;
           }
         }
-        content += (baseContent ? " " : "") + parts.join(" ");
       }
 
-      html += `<div class="message ${direction}">${bates}${ts}<span class="sender">${escapeHtml(m.sender_name || "Unknown")}:</span> <span class="content">${content}</span></div>\n`;
+      const baseContent = m.content || '';
+      const contentText = escapeHtml(baseContent);
+      const hasOnlyMedia = !baseContent && mediaHtml;
+      const bubbleClass = isOut ? 'bubble-out' : 'bubble-in';
+
+      const curSender = m.sender_name || 'Unknown';
+      const curTime = new Date(m.timestamp).getTime();
+      const timeDiff = curTime - prevTime;
+      const curDay = new Date(m.timestamp).toDateString();
+      const prevDay = prevTime ? new Date(prevTime).toDateString() : '';
+      // Messenger groups messages: show a centered timestamp only on a new day or a
+      // significant (>20 min) gap — NOT on every message or every sender change.
+      const showHeader = includeTimestamps && (timeDiff > 1800000 || curDay !== prevDay || prevTime === 0);
+      const nextMsg = mi + 1 < messages.length ? messages[mi + 1] : null;
+      // Avatar sits next to the LAST incoming message of a run: next msg is outgoing,
+      // a different sender, or far enough apart to start a new group.
+      const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1800000));
+
+      if (showHeader) {
+        html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${escapeHtml(formatTimestamp(m.timestamp))}</span></div>\n`;
+      }
+      // NOTE: one-on-one chat — no sender name is rendered (Messenger only shows names
+      // in group chats). The avatar identifies the incoming sender instead.
+
+      html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
+      if (!isOut && isLastInGroup) {
+        html += `<img class="sender-avatar" src="/phone-chrome/profile.png" alt="" onerror="this.style.display='none'">`;
+      } else if (!isOut) {
+        html += `<div class="avatar-spacer"></div>`;
+      }
+      html += `<div class="msg-col">`;
+      if (hasOnlyMedia) {
+        html += `<div class="media-only">${mediaHtml}</div>`;
+      } else {
+        html += `<div class="${bubbleClass}">`;
+        if (contentText) html += `<p class="msg-text">${contentText}</p>`;
+        if (mediaHtml) html += mediaHtml;
+        html += `</div>`;
+      }
+      if (batesLabel) html += batesLabel;
+      html += `</div></div>\n`;
+      prevSender = curSender;
+      prevTime = curTime;
     }
 
+    html += `</div>`;
+    html += buildPhoneChromeBottom(isDark);
+    html += `</div>\n`;
     if (includeProvenance) {
-      html += `
-<div class="provenance">
-  <p>Extracted using CourtThread&trade; ${new Date().getFullYear()}</p>
-  <p>Export date: ${new Date().toISOString()}</p>
-  <p>Total messages exported: ${messages.length}</p>`;
-      if (embedMedia) {
-        html += `
-  <p>Media files bundled: ${bundledMedia.size}${mediaMissing ? ` (${mediaMissing} referenced file(s) not found on disk)` : ""}</p>`;
-      }
-      html += `
-  <p>This document was generated from electronic records imported into CourtThread for the purpose of litigation.</p>
-</div>`;
+      html += buildUnifiedFooter(convInfo);
     }
 
     html += `\n</body>\n</html>`;
 
-    // If we bundled real media files, return a ZIP containing the HTML + media/ folder.
-    if (embedMedia && bundledMedia.size > 0) {
+    // --- MHTML FORMAT ---
+    if (subFormat === "mhtml") {
+      const mimeMap: Record<string, string> = {
+        jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif',
+        webp: 'image/webp', mp4: 'video/mp4', webm: 'video/webm',
+        mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', m4a: 'audio/mp4',
+      };
+      const boundary = '----=_NextPart_' + Date.now().toString(36);
+      let mhtml = `MIME-Version: 1.0\r\nContent-Type: multipart/related; boundary="${boundary}"\r\n\r\n`;
+      mhtml += `--${boundary}\r\nContent-Type: text/html; charset="utf-8"\r\nContent-Location: exhibit.html\r\n\r\n`;
+      mhtml += html + '\r\n';
+
+      const embeddedFiles = new Set<string>();
+      for (const m of messages) {
+        for (const mm of getMediaRefs(m.metadata)) {
+          if (!mm.filename || embeddedFiles.has(mm.filename)) continue;
+          const dir = sourceDirs.get(m.source_id);
+          if (!dir) continue;
+          const diskPath = resolveMediaPath(dir, mm.filename, mm.type);
+          if (!diskPath) continue;
+          try {
+            const buf = fs.readFileSync(diskPath);
+            embeddedFiles.add(mm.filename);
+            const ext = (mm.filename.split('.').pop() || '').toLowerCase();
+            const mime = mimeMap[ext] || 'application/octet-stream';
+            mhtml += `--${boundary}\r\nContent-Type: ${mime}\r\nContent-Transfer-Encoding: base64\r\nContent-Location: ${mm.filename}\r\n\r\n`;
+            const b64 = buf.toString('base64');
+            for (let i = 0; i < b64.length; i += 76) {
+              mhtml += b64.substring(i, i + 76) + '\r\n';
+            }
+          } catch {}
+        }
+      }
+      mhtml += `--${boundary}--\r\n`;
+
+      return new Response(mhtml, {
+        headers: {
+          "Content-Type": "message/rfc822",
+          "Content-Disposition": `attachment; filename="${buildFileName(headerTitle, messages, 'mhtml')}"`,
+        },
+      });
+    }
+
+    // --- ZIP FORMAT (HTML + media folder) ---
+    if (bundleMedia || (embedMedia && bundledMedia.size > 0)) {
       const zip = new AdmZip();
       zip.addFile("exhibit.html", Buffer.from(html, "utf-8"));
+      if (bundleMedia && bundledMedia.size === 0) {
+        for (const m of messages) {
+          for (const mm of getMediaRefs(m.metadata)) {
+            if (!mm.filename) continue;
+            const dir = sourceDirs.get(m.source_id);
+            if (!dir) continue;
+            const diskPath = resolveMediaPath(dir, mm.filename, mm.type);
+            if (diskPath && !bundledMedia.has(`media/${mm.filename}`)) {
+              bundledMedia.set(`media/${mm.filename}`, diskPath);
+            }
+          }
+        }
+      }
       for (const [zipName, diskPath] of bundledMedia) {
         try {
           zip.addFile(zipName, fs.readFileSync(diskPath));
         } catch { /* skip unreadable file */ }
       }
-      const zipBuffer = zip.toBuffer();
-      return new Response(new Uint8Array(zipBuffer), {
-        headers: {
-          "Content-Type": "application/zip",
-          "Content-Disposition": `attachment; filename="CourtThread_Export.zip"`,
-        },
-      });
+      if (bundledMedia.size > 0) {
+        const zipBuffer = zip.toBuffer();
+        return new Response(new Uint8Array(zipBuffer), {
+          headers: {
+            "Content-Type": "application/zip",
+            "Content-Disposition": `attachment; filename="${buildFileName(headerTitle, messages, 'zip')}"`,
+          },
+        });
+      }
     }
 
     return new Response(html, {
       headers: {
         "Content-Type": "text/html; charset=utf-8",
-        "Content-Disposition": `attachment; filename="CourtThread_Export.html"`,
+        "Content-Disposition": `attachment; filename="${buildFileName(headerTitle, messages, 'html')}"`,
       },
     });
   } catch (e: any) {

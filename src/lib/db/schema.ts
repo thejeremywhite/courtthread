@@ -103,6 +103,9 @@ CREATE TABLE IF NOT EXISTS media (
   metadata TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_media_message ON media(message_id);
+CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type);
+
 CREATE TABLE IF NOT EXISTS corrections (
   id TEXT PRIMARY KEY,
   message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
