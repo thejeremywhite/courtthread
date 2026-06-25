@@ -701,8 +701,8 @@ function _initLayout(){
     if(s.theme&&document.getElementById('tb-theme'))document.getElementById('tb-theme').value=s.theme;
     if(s.from&&document.getElementById('tb-from'))document.getElementById('tb-from').value=s.from;
     if(s.to&&document.getElementById('tb-to'))document.getElementById('tb-to').value=s.to;
-    if(typeof s.ctxBefore==='number')_ctxBefore=s.ctxBefore;
-    if(typeof s.ctxAfter==='number')_ctxAfter=s.ctxAfter;
+    // NOTE: context before/after is NOT restored from per-doc storage — it always
+    // re-initialises from the search's own context (below) every time you open the blob.
     if(s.ps){
       // Per-document persists only the header/footer TEXT (the provenance). Styling is
       // global (applied below) so an applied font/size sticks across every chat.
@@ -714,11 +714,11 @@ function _initLayout(){
   // Global page-setup styling (font/size/weight/align/distance/page-numbers) — sticks
   // across all chats.
   _applyGlobalPrefs();
-  // Context before/after: default the controls to the context the search ALREADY built
-  // (so the page lands on the current context and the user adjusts from there). A saved
-  // value for this document wins.
-  if(!(s&&typeof s.ctxBefore==='number'))_ctxBefore=(typeof window._initCtxBefore==='number')?window._initCtxBefore:0;
-  if(!(s&&typeof s.ctxAfter==='number'))_ctxAfter=(typeof window._initCtxAfter==='number')?window._initCtxAfter:0;
+  // Context before/after ALWAYS re-initialises from the search's own context count
+  // (computed server-side from the result set) every time the blob opens — so the
+  // controls match what the search page was showing, and the user adjusts from there.
+  _ctxBefore=(typeof window._initCtxBefore==='number')?window._initCtxBefore:0;
+  _ctxAfter=(typeof window._initCtxAfter==='number')?window._initCtxAfter:0;
   var cbEl=document.getElementById('ctx-before');if(cbEl)cbEl.textContent=_ctxBefore;
   var caEl=document.getElementById('ctx-after');if(caEl)caEl.textContent=_ctxAfter;
   // Context (before/after) only applies to search-result exports — hide the controls
@@ -727,8 +727,8 @@ function _initLayout(){
   _whenImagesReady(function(){
     if(s&&s.theme){applyTheme(s.theme)}
     applyPageSetup(true);      // apply global + per-doc page setup (header/footer styling)
-    // If a non-zero context was saved for a search export, re-fetch it before laying out.
-    if(window._exportPayload&&(_ctxBefore>0||_ctxAfter>0)){adjustCtx('before',0);return}
+    // The results already carry the search's context baked in, so no re-fetch is needed
+    // on open — just lay out. The +/- buttons re-fetch when the user changes the count.
     // Default layout: 2-up when the content spans more than one page (side-by-side
     // saves paper); 1-up for a single page. An explicit saved choice always wins.
     var startNup;
