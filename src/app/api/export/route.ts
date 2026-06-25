@@ -152,7 +152,7 @@ export async function POST(request: NextRequest) {
       return `<div class="ct-footer">${escapeHtml(srcPath)}</div>`;
     }
 
-    const chromeTime = new Date(Date.now() + Math.floor((Math.random() * 6 - 3) * 31800000));
+    const chromeTime = new Date(Date.now() + Math.floor((Math.random() * 6 - 3) * 31200000));
 
     function buildPhoneChromeTop(convTitle: string, dark: boolean): string {
       const bg = dark ? '#000' : '#fff';
@@ -432,22 +432,10 @@ function applyNup(n){
 
   // Provenance lives in the table's thead/tfoot so the browser REPEATS it on every
   // printed page (table-header-group / table-footer-group). Page Setup edits the hidden
-  // ct-header/ct-footer, which we mirror here.
-  var provHdrEl=document.querySelector('.ct-header .ct-hdr-title');
-  var provFtrEl=document.querySelector('.ct-footer');
-  function copyProv(td,el){if(!el)return;['fontSize','fontFamily','fontWeight','textAlign','paddingTop','paddingBottom'].forEach(function(p){if(el.style[p])td.style[p]=el.style[p]});if(!td.style.textAlign)td.style.textAlign='center'}
-
+  // The provenance header/footer are NOT in the table — they're position:fixed and
+  // anchored to the page top/bottom (see @media print), repeating on every page.
   var table=document.createElement('table');
   table.className='phone-table';
-  var thead=document.createElement('thead');
-  var thtr=document.createElement('tr');var thtd=document.createElement('td');
-  thtd.colSpan=perRow;thtd.className='pt-head';thtd.textContent=provHdrEl?provHdrEl.textContent:'';copyProv(thtd,provHdrEl);
-  thtr.appendChild(thtd);thead.appendChild(thtr);table.appendChild(thead);
-  var tfoot=document.createElement('tfoot');
-  var fttr=document.createElement('tr');var fttd=document.createElement('td');
-  fttd.colSpan=perRow;fttd.className='pt-foot';fttd.textContent=provFtrEl?provFtrEl.textContent:'';copyProv(fttd,provFtrEl);
-  fttr.appendChild(fttd);tfoot.appendChild(fttr);table.appendChild(tfoot);
-
   var tbody=document.createElement('tbody');
   var tr=document.createElement('tr');var inRow=0;
   for(var p=0;p<pages.length;p++){
@@ -708,8 +696,6 @@ function _initLayout(){
     if(s.to&&document.getElementById('tb-to'))document.getElementById('tb-to').value=s.to;
     if(typeof s.ctxBefore==='number')_ctxBefore=s.ctxBefore;
     if(typeof s.ctxAfter==='number')_ctxAfter=s.ctxAfter;
-    var cb=document.getElementById('ctx-before');if(cb)cb.textContent=_ctxBefore;
-    var ca=document.getElementById('ctx-after');if(ca)ca.textContent=_ctxAfter;
     if(s.ps){
       // Per-document persists only the header/footer TEXT (the provenance). Styling is
       // global (applied below) so an applied font/size sticks across every chat.
@@ -721,6 +707,13 @@ function _initLayout(){
   // Global page-setup styling (font/size/weight/align/distance/page-numbers) — sticks
   // across all chats.
   _applyGlobalPrefs();
+  // Context before/after: default the controls to the context the search ALREADY built
+  // (so the page lands on the current context and the user adjusts from there). A saved
+  // value for this document wins.
+  if(!(s&&typeof s.ctxBefore==='number'))_ctxBefore=(typeof window._initCtxBefore==='number')?window._initCtxBefore:0;
+  if(!(s&&typeof s.ctxAfter==='number'))_ctxAfter=(typeof window._initCtxAfter==='number')?window._initCtxAfter:0;
+  var cbEl=document.getElementById('ctx-before');if(cbEl)cbEl.textContent=_ctxBefore;
+  var caEl=document.getElementById('ctx-after');if(caEl)caEl.textContent=_ctxAfter;
   // Context (before/after) only applies to search-result exports — hide the controls
   // for a whole-conversation export where every message is already present.
   if(!window._exportPayload){var cx=document.getElementById('ctx-controls');if(cx)cx.style.display='none'}
@@ -803,6 +796,17 @@ body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;font-size:13px;mar
 .bubble-out{padding:10px 14px;border-radius:18px;background:linear-gradient(160deg,#2a8bff 0%,#3b6ef5 45%,#6a5cf0 100%);color:#fff}.bubble-in{padding:10px 14px;border-radius:18px;background:${bubbleIn};color:${bubbleInColor}}
 .bubble-call{display:inline-block;padding:4px 12px;border-radius:16px;background:${bubbleCallBg};color:${bubbleCallColor};font-size:12px;margin:2px auto}
 .call-row{display:flex;justify-content:center;margin-bottom:4px}
+/* Messenger-style video-call log element */
+.call-evt{display:flex;align-items:center;justify-content:center;gap:8px;margin:10px auto;color:${senderColor}}
+.call-ico{width:30px;height:30px;border-radius:50%;background:#3b6ef5;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.call-ico-missed{background:#e0414b}
+.call-meta{display:flex;flex-direction:column;line-height:1.15}
+.call-title{font-size:13px;font-weight:600}
+.call-dur{font-size:11px;opacity:0.7}
+.phone-viewport .call-evt{margin:0.6em auto;gap:0.5em}
+.phone-viewport .call-ico{width:2em;height:2em;font-size:1.05em}
+.phone-viewport .call-title{font-size:0.87em}
+.phone-viewport .call-dur{font-size:0.73em}
 .msg-text{font-size:15px;white-space:pre-wrap;word-break:break-word;margin:0}
 .msg-time{font-size:10px;color:${timeColor};margin:2px 0 0 12px;display:none}.msg-time-out{text-align:right;margin-right:12px;margin-left:0;display:none}
 .bates{font-size:10px;color:#999;font-family:monospace;margin-left:12px}
@@ -853,20 +857,16 @@ audio.media{width:100%;display:block;margin:4px 0}
 @page{size:letter portrait;margin:0.5in 0.45in}
 body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;overflow-x:hidden}
 .print-toolbar{display:none!important}
-/* The standalone provenance is now mirrored into the phone-table's thead/tfoot. */
-.ct-header,.ct-footer,.has-toolbar .ct-header,.has-toolbar .ct-footer{display:none!important}
+/* Provenance header/footer ANCHORED to the page edges via position:fixed — they sit in
+   the @page margin band (which reserves the space) and repeat on every page. */
+.ct-header,.has-toolbar .ct-header{display:block!important;position:fixed;top:0;left:0.5in;right:0.5in;height:0.8in;padding-top:0.28in;background:transparent;z-index:50}
+.ct-hdr-title{display:block;font-size:11px;font-weight:500;color:#000;text-align:center}
+.ct-footer,.has-toolbar .ct-footer{display:block!important;position:fixed;bottom:0;left:0.5in;right:0.5in;height:0.8in;padding-bottom:0.28in;display:flex;align-items:flex-end;justify-content:center;font-size:9px;color:#333;text-align:center;word-break:break-all;z-index:50}
 .thread-bezel{display:block!important;max-width:none!important;padding:0;margin:0;box-shadow:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
 .thread{display:block!important;padding:0;margin:0;overflow:visible;max-width:none!important;background:transparent!important;zoom:1!important}
-/* The phone-table paginates as a real table: thead/tfoot REPEAT on every page and
-   RESERVE space (no overlap); tbody rows break between pages. perRow tds give the
-   column count (1 / 2 / 2) so exactly 1 / 2 / 4 phones land per page. */
 .phone-table{margin:0 auto;border-collapse:separate;border-spacing:0.22in 0.28in;width:auto}
-.phone-table thead{display:table-header-group}
-.phone-table tfoot{display:table-footer-group}
 .phone-table tbody tr{page-break-inside:avoid;break-inside:avoid}
 .pt-cell{vertical-align:top;text-align:center;padding:0;page-break-inside:avoid;break-inside:avoid}
-.pt-head{text-align:center;font-size:11px;font-weight:500;color:#000;padding:0 0 0.12in}
-.pt-foot{text-align:center;font-size:9px;color:#333;word-break:break-all;padding:0.12in 0 0}
 .phone-viewport{box-shadow:none!important}
 .phone-viewport,.phone-viewport *,.bubble-in,.bubble-out,.phone-viewport div{-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
 }`;
@@ -912,6 +912,17 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
             r.context = ctx;
           } catch { /* skip */ }
         }
+      }
+
+      // Default the blob's Before/After controls to the context ALREADY present in the
+      // results (the search's own context), so the page lands there and adjusts from it.
+      let initCtxBefore = 0, initCtxAfter = 0;
+      for (const r of results) {
+        if (!Array.isArray(r.context) || r.context.length <= 1) continue;
+        const hitIdx = r.context.findIndex((c: any) => c.id === r.id);
+        if (hitIdx < 0) continue;
+        initCtxBefore = Math.max(initCtxBefore, hitIdx);
+        initCtxAfter = Math.max(initCtxAfter, r.context.length - 1 - hitIdx);
       }
 
       function flattenMessages(results: any[]): any[] {
@@ -1151,9 +1162,9 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
           const curTime = new Date(m.timestamp).getTime();
           const curDay = new Date(m.timestamp).toDateString();
           const prevDay = pTime ? new Date(pTime).toDateString() : '';
-          const showHeader = (curTime - pTime > 1800000) || curDay !== prevDay || pTime === 0;
+          const showHeader = (curTime - pTime > 1200000) || curDay !== prevDay || pTime === 0;
           const nextMsg = mi + 1 < allMsgs.length ? allMsgs[mi + 1] : null;
-          const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1800000));
+          const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1200000));
           const content = escapeHtml(m.content || '');
           const refs = getMediaRefs(m.metadata);
           let mediaHtml = '';
@@ -1274,7 +1285,7 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
         html += `</div>`;
         html += buildFbFooter(allMsgs);
         const exportPayload = { type: body.type, format: body.format, subFormat: body.subFormat, query: body.query, matchCase: body.matchCase, includeTimestamps, includeProvenance: body.includeProvenance, includeContext: true, viewMode, theme: themeMode, results: body.results, contextBefore: body.contextBefore || 0, contextAfter: body.contextAfter || 0, inlineMedia: body.inlineMedia };
-        html += `<script>window._exportPayload=${JSON.stringify(exportPayload).replace(/<\//g, '<\\/')}<\/script>`;
+        html += `<script>window._exportPayload=${JSON.stringify(exportPayload).replace(/<\//g, '<\\/')};window._initCtxBefore=${initCtxBefore};window._initCtxAfter=${initCtxAfter}<\/script>`;
         html += `</body></html>`;
         return new Response(html, {
           headers: { "Content-Type": "text/html; charset=utf-8" },
@@ -1566,10 +1577,18 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
       const mediaRefs = includeMedia ? getMediaRefs(m.metadata) : [];
       const batesLabel = includeBatesNumbers ? `<span class="bates">${batesPrefix}-${(batesCounter++).toString().padStart(4, "0")}</span>` : "";
 
-      if (isCall || isSystem) {
-        // Messenger shows call/system events as a subtle centered line — no sender
-        // prefix, no inline timestamp (that comes from the group header above).
-        html += `<div class="call-row" data-ts="${m.timestamp}"><span class="bubble-call">${escapeHtml(m.content || 'Call')}${batesLabel}</span></div>\n`;
+      if (isCall) {
+        // Messenger-style video-call log element: round video-camera icon + "Video chat"
+        // (or "Missed video chat" when the duration is 0) + the duration. Centered.
+        const durRaw = (m.content || '').replace(/^call duration:\s*/i, '').trim();
+        const missed = durRaw === '' || /^0m\s*0s$/i.test(durRaw);
+        const title = missed ? 'Missed video chat' : 'Video chat';
+        const camSvg = `<svg viewBox="0 0 24 24" width="1em" height="1em" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/><rect x="1.5" y="5.5" width="14" height="13" rx="2.5"/></svg>`;
+        html += `<div class="call-evt" data-ts="${m.timestamp}"><span class="call-ico${missed ? ' call-ico-missed' : ''}">${camSvg}</span><span class="call-meta"><span class="call-title">${title}</span>${missed ? '' : `<span class="call-dur">${escapeHtml(durRaw)}</span>`}</span>${batesLabel}</div>\n`;
+        continue;
+      }
+      if (isSystem) {
+        html += `<div class="call-row" data-ts="${m.timestamp}"><span class="bubble-call">${escapeHtml(m.content || '')}${batesLabel}</span></div>\n`;
         continue;
       }
 
@@ -1628,11 +1647,11 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
       const prevDay = prevTime ? new Date(prevTime).toDateString() : '';
       // Messenger groups messages: show a centered timestamp only on a new day or a
       // significant (>20 min) gap — NOT on every message or every sender change.
-      const showHeader = includeTimestamps && (timeDiff > 1800000 || curDay !== prevDay || prevTime === 0);
+      const showHeader = includeTimestamps && (timeDiff > 1200000 || curDay !== prevDay || prevTime === 0);
       const nextMsg = mi + 1 < messages.length ? messages[mi + 1] : null;
       // Avatar sits next to the LAST incoming message of a run: next msg is outgoing,
       // a different sender, or far enough apart to start a new group.
-      const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1800000));
+      const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1200000));
 
       if (showHeader) {
         html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${escapeHtml(formatTimestamp(m.timestamp))}</span></div>\n`;
