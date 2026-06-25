@@ -20,12 +20,12 @@ interface ImportMetadataDialogProps {
   onCancel: () => void;
 }
 
-const KNOWN_PLATFORMS = [
+export const KNOWN_PLATFORMS = [
   "Facebook Messenger", "SMS / Text Messages", "Instagram", "WhatsApp",
   "iMessage", "Telegram", "Signal", "Email",
 ];
 
-const EXPORT_METHODS = [
+export const EXPORT_METHODS = [
   "Official platform export / download",
   "Third-party backup app",
   "Screenshot",

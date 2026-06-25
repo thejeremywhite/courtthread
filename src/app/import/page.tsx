@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { ImportMetadataDialog, ImportMetadata } from "@/components/import/ImportMetadataDialog";
+import { ImportMetadataDialog, ImportMetadata, KNOWN_PLATFORMS, EXPORT_METHODS } from "@/components/import/ImportMetadataDialog";
+import { DateTimePicker } from "@/components/DateTimePicker";
 import { cleanSourceName } from "@/lib/sourceName";
 
 interface PendingImport {
@@ -254,6 +255,20 @@ export default function ImportPage() {
       notes: prov.notes || "",
       localMediaPath: meta.localMediaPath || "",
     });
+  }
+
+  // Toggle a value within a comma-separated metadata field (for the chip selectors).
+  function toggleMetaCsv(field: string, val: string) {
+    setEditingMeta((prev) => {
+      if (!prev) return prev;
+      const cur = (prev[field] || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const i = cur.indexOf(val);
+      if (i >= 0) cur.splice(i, 1); else cur.push(val);
+      return { ...prev, [field]: cur.join(", ") };
+    });
+  }
+  function metaHasCsv(field: string, val: string) {
+    return (editingMeta?.[field] || "").split(",").map((s) => s.trim()).includes(val);
   }
 
   async function handleSaveMeta() {
@@ -660,54 +675,88 @@ export default function ImportPage() {
                             </button>
                           </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-3">
+                        <div className="space-y-4">
+                          {/* Platforms — same multi-select chips as the import-time form */}
                           <div>
-                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Platform(s)</label>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1.5">Platform(s) — select all that apply</label>
+                            <div className="flex flex-wrap gap-1.5">
+                              {KNOWN_PLATFORMS.map((p) => (
+                                <button key={p} type="button" onClick={() => toggleMetaCsv("platforms", p)}
+                                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${
+                                    metaHasCsv("platforms", p) ? "bg-[var(--primary)] text-white" : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                                  }`}>{p}</button>
+                              ))}
+                            </div>
                             <input type="text" value={editingMeta.platforms} onChange={(e) => setEditingMeta({...editingMeta, platforms: e.target.value})}
-                              placeholder="e.g. Facebook Messenger"
-                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                              placeholder="Platforms (comma-separated; chips above also edit this)"
+                              className="w-full mt-2 px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
                           </div>
+
+                          {/* How obtained — multi-select chips */}
                           <div>
-                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Date Obtained</label>
-                            <input type="text" value={editingMeta.dateObtained} onChange={(e) => setEditingMeta({...editingMeta, dateObtained: e.target.value})}
-                              placeholder="e.g. 2024-01-15"
-                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1.5">How was this data obtained? Select all that apply</label>
+                            <div className="flex flex-wrap gap-1.5">
+                              {EXPORT_METHODS.map((m) => (
+                                <button key={m} type="button" onClick={() => toggleMetaCsv("exportMethods", m)}
+                                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition ${
+                                    metaHasCsv("exportMethods", m) ? "bg-[var(--primary)] text-white" : "bg-[var(--secondary)] text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+                                  }`}>{m}</button>
+                              ))}
+                            </div>
+                            <input type="text" value={editingMeta.exportMethods} onChange={(e) => setEditingMeta({...editingMeta, exportMethods: e.target.value})}
+                              placeholder="Other method..."
+                              className="w-full mt-2 px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
                           </div>
+
                           <div>
-                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Modified?</label>
-                            <select value={editingMeta.wasModified} onChange={(e) => setEditingMeta({...editingMeta, wasModified: e.target.value})}
-                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm">
-                              <option value="no">No, original</option>
-                              <option value="yes">Yes, modified</option>
-                              <option value="unknown">Not sure</option>
-                            </select>
-                          </div>
-                          <div className="col-span-2">
-                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Source Description</label>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1.5">Source Description</label>
                             <input type="text" value={editingMeta.sourceDescription} onChange={(e) => setEditingMeta({...editingMeta, sourceDescription: e.target.value})}
                               placeholder="e.g. Downloaded from Facebook account settings on my laptop"
                               className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
                           </div>
+
+                          {/* Date obtained — same DateTimePicker as the import-time form */}
                           <div>
-                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">How Obtained</label>
-                            <input type="text" value={editingMeta.exportMethods} onChange={(e) => setEditingMeta({...editingMeta, exportMethods: e.target.value})}
-                              placeholder="e.g. Official platform export"
-                              className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
-                          </div>
-                          {editingMeta.wasModified === "yes" && (
-                            <div className="col-span-3">
-                              <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Modification Notes</label>
-                              <input type="text" value={editingMeta.modificationNotes} onChange={(e) => setEditingMeta({...editingMeta, modificationNotes: e.target.value})}
-                                className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1.5">Date &amp; time obtained / exported</label>
+                            <div className="w-56">
+                              <DateTimePicker value={editingMeta.dateObtained} onChange={(v) => setEditingMeta({...editingMeta, dateObtained: v})} placeholder="Pick date & time..." />
                             </div>
-                          )}
-                          <div className="col-span-3">
-                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Notes</label>
+                          </div>
+
+                          {/* Modified? — same 3-button selector */}
+                          <div>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1.5">Was this data modified before import?</label>
+                            <div className="flex gap-2 max-w-md">
+                              {([
+                                { key: "no", label: "No, original" },
+                                { key: "yes", label: "Yes, modified" },
+                                { key: "unknown", label: "Not sure" },
+                              ]).map((opt) => (
+                                <button key={opt.key} type="button" onClick={() => setEditingMeta({...editingMeta, wasModified: opt.key})}
+                                  className={`flex-1 px-3 py-1.5 rounded-lg border text-xs font-medium transition ${
+                                    editingMeta.wasModified === opt.key
+                                      ? opt.key === "yes" ? "border-amber-500 bg-amber-500/10 text-amber-400"
+                                        : opt.key === "no" ? "border-green-500 bg-green-500/10 text-green-400"
+                                        : "border-[var(--primary)] bg-[var(--primary)]/10"
+                                      : "border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--muted-foreground)]"
+                                  }`}>{opt.label}</button>
+                              ))}
+                            </div>
+                            {editingMeta.wasModified === "yes" && (
+                              <textarea value={editingMeta.modificationNotes} onChange={(e) => setEditingMeta({...editingMeta, modificationNotes: e.target.value})}
+                                placeholder="Describe what was changed and why..." rows={2}
+                                className="w-full mt-2 px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm resize-none" />
+                            )}
+                          </div>
+
+                          <div>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1.5">Additional notes</label>
                             <input type="text" value={editingMeta.notes} onChange={(e) => setEditingMeta({...editingMeta, notes: e.target.value})}
                               className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm" />
                           </div>
-                          <div className="col-span-3">
-                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1">Local Media Path</label>
+
+                          <div>
+                            <label className="text-xs text-[var(--muted-foreground)] uppercase block mb-1.5">Local Media Path</label>
                             <input type="text" value={editingMeta.localMediaPath} onChange={(e) => setEditingMeta({...editingMeta, localMediaPath: e.target.value})}
                               placeholder="Path to media folder on disk"
                               className="w-full px-2 py-1.5 rounded border border-[var(--border)] bg-[var(--card)] text-sm font-mono" />
