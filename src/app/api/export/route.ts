@@ -422,8 +422,11 @@ function applyNup(n){
   //  4-up ~1.93in wide / 4.18in tall so 2 rows (=4 phones) reliably fit one page.
   var phoneW=(n===4?185:336);
   var phoneH=Math.round(phoneW*RATIO);
-  var fontSize=Math.round(15*(phoneW/REF)*10)/10;
+  var fontSize=Math.round(16.5*(phoneW/REF)*10)/10;
   var bgImg=d?'/phone-chrome/dark.png':'/phone-chrome/light.png';
+  // Full wallpaper (pastel/dark swirl) behind the messages. The crisp chrome overlay
+  // (bgImg) still sits on top; messages render over the swirl, between the two.
+  var bgFull=d?'/phone-chrome/bg-dark.png':'/phone-chrome/bg-light.png';
   var padTop=Math.round(phoneH*0.108);
   var padBot=Math.round(phoneH*0.122);
   // View mode scales the ON-SCREEN preview only (Tablet/Desktop = larger, easier to
@@ -447,7 +450,7 @@ function applyNup(n){
     // overflow slides BEHIND the header/footer chrome instead of over it.
     var pv=document.createElement('div');
     pv.className='phone-viewport';
-    pv.style.cssText='position:relative;display:block;background:'+innerBg+';color:'+innerColor+';border:1px solid #9a9a9a;border-radius:0;box-shadow:0 2px 10px rgba(0,0,0,0.3);width:'+phoneW+'px;height:'+phoneH+'px;overflow:hidden;font-size:'+fontSize+'px;word-break:break-word;overflow-wrap:break-word;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    pv.style.cssText='position:relative;display:block;background:'+innerBg+' url('+bgFull+') center/100% 100% no-repeat;color:'+innerColor+';border:1px solid #9a9a9a;border-radius:0;box-shadow:0 2px 10px rgba(0,0,0,0.3);width:'+phoneW+'px;height:'+phoneH+'px;overflow:hidden;font-size:'+fontSize+'px;word-break:break-word;overflow-wrap:break-word;-webkit-print-color-adjust:exact;print-color-adjust:exact';
     var content=document.createElement('div');
     content.style.cssText='position:absolute;top:0;left:0;right:0;bottom:0;z-index:1;overflow:hidden;padding:'+padTop+'px 10px '+padBot+'px;color:'+innerColor+';background:transparent;box-sizing:border-box';
     for(var m=0;m<pages[p].length;m++){content.appendChild(pages[p][m].cloneNode(true))}
