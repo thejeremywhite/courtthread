@@ -152,7 +152,10 @@ export async function POST(request: NextRequest) {
       return `<div class="ct-footer">${escapeHtml(srcPath)}</div>`;
     }
 
-    const chromeTime = new Date(Date.now() + Math.floor((Math.random() * 6 - 3) * 31200000));
+    // Status-bar clock: "right now" shifted by a random offset within ±3 hours, computed
+    // ONCE per export so every phone shows the same plausible time.
+    const chromeTime = new Date(Date.now() + Math.round((Math.random() * 6 - 3) * 3600000));
+    const chromeTimeStr = `${chromeTime.getHours() % 12 || 12}:${String(chromeTime.getMinutes()).padStart(2, '0')}`;
 
     function buildPhoneChromeTop(convTitle: string, dark: boolean): string {
       const bg = dark ? '#000' : '#fff';
@@ -246,6 +249,7 @@ export async function POST(request: NextRequest) {
 </div>
 </div>
 <script>
+window._chromeTimeStr=${JSON.stringify(chromeTimeStr)};
 var _serverHtml=null;
 var _curNup=1;
 var _ctxBefore=0;var _ctxAfter=0;
@@ -359,7 +363,7 @@ function _paginate(){
   var measurer=document.createElement('div');
   measurer.className='phone-viewport';
   measurer.style.cssText='position:absolute;left:-9999px;top:0;width:'+viewW+'px;padding:0 10px;font-size:16.5px;overflow:visible;visibility:hidden;border:none;box-shadow:none;background:none;word-break:break-word;overflow-wrap:break-word';
-  measurer.style.fontFamily=getComputedStyle(thread).fontFamily;
+  measurer.style.fontFamily="'Roboto','Segoe UI',Arial,sans-serif"; // must match .phone-viewport (NOT thread) or measurement mis-sizes
   document.body.appendChild(measurer);
   function h(el){measurer.innerHTML='';measurer.appendChild(el.cloneNode(true));return measurer.scrollHeight}
   function isSepEl(el){return el.classList&&el.classList.contains('date-sep')}
@@ -497,6 +501,15 @@ function applyNup(n){
     arrow.setAttribute('alt','');
     arrow.onerror=function(){this.style.display='none'};
     pv.appendChild(arrow);
+    // Live status-bar clock painted over the PNG's baked-in time. The status-bar bg is a
+    // flat colour, so a matching patch fully hides the original number; Roboto bold in the
+    // same grey/white matches Android Messenger.
+    if(window._chromeTimeStr){
+      var clk=document.createElement('div');
+      clk.textContent=window._chromeTimeStr;
+      clk.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.026)+'px;top:'+(phoneH*0.0091)+'px;width:'+(phoneW*0.092)+'px;height:'+(phoneH*0.025)+'px;background:'+(d?'#000':'rgb(242,250,253)')+';display:flex;align-items:center;justify-content:flex-start;padding-left:'+(phoneW*0.009)+'px;font-family:Roboto,Arial,sans-serif;font-weight:700;font-size:'+(phoneH*0.0163)+'px;line-height:1;color:'+(d?'#ededed':'#45484a')+';-webkit-print-color-adjust:exact;print-color-adjust:exact';
+      pv.appendChild(clk);
+    }
     var td=document.createElement('td');td.className='pt-cell';td.appendChild(pv);
     tr.appendChild(td);inRow++;
     if(inRow===perRow){tbody.appendChild(tr);tr=document.createElement('tr');inRow=0}
@@ -710,6 +723,15 @@ function _loadSettings(){
 // Re-run a function once every image in the thread has finished loading, so
 // pagination measures real heights (deterministic — no alternating layout on refresh).
 function _whenImagesReady(cb){
+  // Gate on web-fonts too: pagination measures inside .phone-viewport (Roboto), so Roboto
+  // must be loaded before we measure or the page would over/under-pack. fonts.load() forces
+  // the actual files to download (they aren't "used" until applyNup builds the viewports).
+  var _cb=cb;
+  cb=function(){
+    if(document.fonts&&document.fonts.load){
+      Promise.all([document.fonts.load("400 16px Roboto"),document.fonts.load("500 16px Roboto"),document.fonts.load("700 16px Roboto")]).then(_cb,_cb);
+    }else{_cb()}
+  };
   var thread=document.querySelector('.thread');
   if(!thread){cb();return}
   var imgs=Array.prototype.slice.call(thread.querySelectorAll('img'));
@@ -825,7 +847,10 @@ document.addEventListener('DOMContentLoaded',_initLayout);
     const mediaRefColor = isDark ? "#d4b800" : "#8a6d00";
 
     const threadBorder = isDark ? '#555' : '#bbb';
-    const UNIFIED_CSS = `*{box-sizing:border-box}
+    const UNIFIED_CSS = `@font-face{font-family:'Roboto';font-style:normal;font-weight:400;font-display:block;src:url('/fonts/roboto-latin-400-normal.woff2') format('woff2')}
+@font-face{font-family:'Roboto';font-style:normal;font-weight:500;font-display:block;src:url('/fonts/roboto-latin-500-normal.woff2') format('woff2')}
+@font-face{font-family:'Roboto';font-style:normal;font-weight:700;font-display:block;src:url('/fonts/roboto-latin-700-normal.woff2') format('woff2')}
+*{box-sizing:border-box}
 body{font-family:'Segoe UI','Helvetica Neue',Arial,sans-serif;font-size:13px;margin:0 auto;padding:20px;color:#333;background:#f0f0f0}
 @media(prefers-color-scheme:dark){body{background:#1a1a1a;color:#ddd}}
 .thread-bezel{padding:0;margin:0 auto;max-width:${viewMode === "mobile" ? "412px" : viewMode === "tablet" ? "800px" : "100%"};background:transparent;border:none;border-radius:0;box-shadow:0 2px 12px rgba(0,0,0,0.3)}
@@ -868,7 +893,7 @@ audio.media{width:100%;display:block;margin:4px 0}
 .phone-table{margin:0 auto;border-collapse:separate;border-spacing:16px}
 .phone-table thead,.phone-table tfoot{display:none}
 .pt-cell{vertical-align:top;text-align:center;padding:0}
-.phone-viewport{border:none;border-radius:0;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,0.3);flex-shrink:0}
+.phone-viewport{border:none;border-radius:0;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,0.3);flex-shrink:0;font-family:'Roboto','Segoe UI',Arial,sans-serif}
 .phone-viewport *{box-sizing:border-box;max-width:100%}
 .phone-viewport .msg-row{margin-bottom:0.267em}
 .phone-viewport .msg-col{max-width:70%;word-break:break-word;overflow-wrap:break-word}
