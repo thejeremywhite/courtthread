@@ -46,6 +46,35 @@ function escapeHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// Messenger call-log card — SHARED by every export path (conversation loop, search print
+// blob, and the HTML/MHTML bubble format) so the call card can never be missing from one.
+// Every Facebook call here is a VIDEO call (Jeremy never makes audio calls): a logged
+// duration of 0m 0s = a missed video call (subtitle shows the call's clock time); any other
+// duration = an answered video call (subtitle shows a human duration). Direction places the
+// card left (with the sender avatar) or right, like a message bubble.
+function buildCallRow(m: any, isOut: boolean, extra: string = ""): string {
+  const durRaw = (m.content || '').replace(/^call\s*(?:duration|info)\s*:\s*/i, '').trim();
+  const dm = durRaw.match(/(\d+)\s*m\s*(\d+)\s*s/i);
+  const totalSecs = dm ? (parseInt(dm[1], 10) * 60 + parseInt(dm[2], 10)) : (durRaw === '' ? 0 : -1);
+  const missed = totalSecs === 0 || /missed/i.test(m.content || '');
+  const title = missed ? 'Missed video call' : 'Video call';
+  let sub: string;
+  if (missed) sub = new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  else if (totalSecs > 0) {
+    if (totalSecs < 60) sub = `${totalSecs} ${totalSecs === 1 ? 'sec' : 'secs'}`;
+    else { const hr = Math.floor(totalSecs / 3600); const mn = Math.floor((totalSecs % 3600) / 60); sub = (hr > 0 ? `${hr} ${hr === 1 ? 'hr' : 'hrs'} ` : '') + `${mn} ${mn === 1 ? 'min' : 'mins'}`; }
+  } else sub = durRaw;
+  const camSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>`;
+  const camMissedSvg = `<svg viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="12" height="11" rx="2.6" fill="#fff"/><path d="M16.5 11 L22 7.2 V16.8 L16.5 13 Z" fill="#fff"/><path d="M5.7 9.8 L11.3 15.4 M11.3 9.8 L5.7 15.4" stroke="#fa3e3e" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>`;
+  const ico = missed ? camMissedSvg : camSvg;
+  return `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`
+    + (!isOut ? `<img class="sender-avatar" src="/phone-chrome/profile.png" alt="" onerror="this.style.display='none'">` : '')
+    + `<div class="msg-col call-col"><div class="call-card">`
+    + `<div class="call-head"><span class="call-ico${missed ? ' call-ico-missed' : ''}">${ico}</span>`
+    + `<span class="call-meta"><span class="call-title">${escapeHtml(title)}</span><span class="call-dur">${escapeHtml(sub)}</span></span></div>`
+    + `<div class="call-back">Call back</div></div>${extra}</div></div>\n`;
+}
+
 // Escape HTML, then wrap matches of `term` in <mark> — same highlight as the search UI.
 function escapeAndHighlight(text: string, term: string, matchCase: boolean): string {
   const escaped = escapeHtml(text);
@@ -1299,7 +1328,7 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
           const curTime = new Date(m.timestamp).getTime();
           const curDay = new Date(m.timestamp).toDateString();
           const prevDay = pTime ? new Date(pTime).toDateString() : '';
-          const showHeader = (curTime - pTime > 300000) || curDay !== prevDay || pTime === 0;
+          const showHeader = (m.message_type === 'call') || (curTime - pTime > 300000) || curDay !== prevDay || pTime === 0;
           const showSender = !isOut && (curSender !== pSender || showHeader);
           const content = escapeHtml(m.content || '');
           let mediaHtml: string;
@@ -1313,6 +1342,7 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
           const bubbleClass = isOut ? 'bubble-out' : 'bubble-in';
 
           if (showHeader) html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${fbTimestamp(m.timestamp)}</span></div>`;
+          if (m.message_type === 'call') { html += buildCallRow(m, isOut); pSender = curSender; pTime = curTime; continue; }
           if (showSender) html += `<p class="sender-name">${escapeHtml(curSender)}</p>`;
           html += `<div>`;
           html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
@@ -1346,7 +1376,7 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
           const curTime = new Date(m.timestamp).getTime();
           const curDay = new Date(m.timestamp).toDateString();
           const prevDay = pTime ? new Date(pTime).toDateString() : '';
-          const showHeader = (curTime - pTime > 1200000) || curDay !== prevDay || pTime === 0;
+          const showHeader = (m.message_type === 'call') || (curTime - pTime > 1200000) || curDay !== prevDay || pTime === 0;
           const nextMsg = mi + 1 < allMsgs.length ? allMsgs[mi + 1] : null;
           const isLastInGroup = !isOut && (!nextMsg || nextMsg.sender_name !== curSender || nextMsg.is_incoming !== m.is_incoming || (new Date(nextMsg.timestamp).getTime() - curTime > 1200000));
           const content = escapeHtml(m.content || '');
@@ -1369,6 +1399,7 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
           const bubbleClass = isOut ? 'bubble-out' : 'bubble-in';
 
           if (showHeader) html += `<div class="date-sep" data-ts="${m.timestamp}"><span class="date-label">${fbTimestamp(m.timestamp)}</span></div>`;
+          if (m.message_type === 'call') { html += buildCallRow(m, isOut); pTime = curTime; continue; }
           html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
           if (!isOut && isLastInGroup) {
             html += `<img class="sender-avatar" src="/phone-chrome/profile.png" alt="" onerror="this.style.display='none'">`;
@@ -1780,39 +1811,7 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
       }
 
       if (isCall) {
-        // Messenger call-log card: round icon + title + subtitle + "Call back" button.
-        // A logged duration of 0m 0s means the call was never answered → it is shown as
-        // a "Missed" call (in one direction); the subtitle then shows the call time
-        // instead of a duration. Direction (is_incoming) places the card left (with the
-        // sender avatar) or right, exactly like a message bubble.
-        const durRaw = (m.content || '').replace(/^call\s*(?:duration|info)\s*:\s*/i, '').trim();
-        const dm = durRaw.match(/(\d+)\s*m\s*(\d+)\s*s/i);
-        const totalSecs = dm ? (parseInt(dm[1], 10) * 60 + parseInt(dm[2], 10)) : (durRaw === '' ? 0 : -1);
-        const missed = totalSecs === 0 || /missed/i.test(m.content || '');
-        // Audio vs video — fall back to audio only if the source text clearly says so.
-        const isAudio = /\b(?:audio|voice)\b/i.test(m.content || '');
-        const kind = isAudio ? 'audio' : 'video';
-        const callTitle = missed ? `Missed ${kind} call` : (kind === 'audio' ? 'Audio call' : 'Video call');
-        // subtitle: missed → the call's clock time; answered → a human duration
-        let callSub;
-        if (missed) {
-          callSub = new Date(m.timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-        } else if (totalSecs > 0) {
-          if (totalSecs < 60) { callSub = `${totalSecs} ${totalSecs === 1 ? 'sec' : 'secs'}`; }
-          else { const hr = Math.floor(totalSecs / 3600); const mn = Math.floor((totalSecs % 3600) / 60); callSub = (hr > 0 ? `${hr} ${hr === 1 ? 'hr' : 'hrs'} ` : '') + `${mn} ${mn === 1 ? 'min' : 'mins'}`; }
-        } else { callSub = durRaw; }
-        const camSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>`;
-        // Missed video: white camera body + lens with an X (painted in the missed-icon red
-        // so it reads as a knockout), matching Messenger's missed-video glyph exactly.
-        const camMissedSvg = `<svg viewBox="0 0 24 24"><rect x="2.5" y="6.5" width="12" height="11" rx="2.6" fill="#fff"/><path d="M16.5 11 L22 7.2 V16.8 L16.5 13 Z" fill="#fff"/><path d="M5.7 9.8 L11.3 15.4 M11.3 9.8 L5.7 15.4" stroke="#fa3e3e" stroke-width="2.2" stroke-linecap="round" fill="none"/></svg>`;
-        const phoneSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.4 0 .8-.3 1l-2.2 2.2z"/></svg>`;
-        const callIco = isAudio ? phoneSvg : (missed ? camMissedSvg : camSvg);
-        html += `<div class="msg-row ${isOut ? 'msg-out' : 'msg-in'}" data-ts="${m.timestamp}">`;
-        if (!isOut) html += `<img class="sender-avatar" src="/phone-chrome/profile.png" alt="" onerror="this.style.display='none'">`;
-        html += `<div class="msg-col call-col"><div class="call-card">`
-          + `<div class="call-head"><span class="call-ico${missed ? ' call-ico-missed' : ''}">${callIco}</span>`
-          + `<span class="call-meta"><span class="call-title">${escapeHtml(callTitle)}</span><span class="call-dur">${escapeHtml(callSub)}</span></span></div>`
-          + `<div class="call-back">Call back</div></div>${batesLabel}</div></div>\n`;
+        html += buildCallRow(m, isOut, batesLabel);
         prevSender = curSender;
         prevTime = curTime;
         continue;
