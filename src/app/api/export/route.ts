@@ -681,6 +681,15 @@ function applyNup(n){
     overlay.className='phone-chrome-overlay';
     overlay.style.cssText='position:absolute;top:0;left:0;width:100%;height:100%;z-index:5;background:url('+bgImg+') center/100% 100% no-repeat;pointer-events:none;-webkit-print-color-adjust:exact;print-color-adjust:exact';
     pv.appendChild(overlay);
+    // Replace the chrome PNG's baked-in bottom bar (input bar + nav, incl. the old composer
+    // bitmoji) with the supplied thumbs-up bar — opaque, covering the old region exactly.
+    var barH=phoneH*(d?0.131:0.123);
+    var bar=document.createElement('img');
+    bar.src=d?'/phone-chrome/bar-dark.png':'/phone-chrome/bar-light.png';
+    bar.setAttribute('alt','');
+    bar.style.cssText='position:absolute;z-index:6;left:0;bottom:0;width:'+phoneW+'px;height:'+barH+'px;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    bar.onerror=function(){this.style.display='none'};
+    pv.appendChild(bar);
     // Messenger's scroll-to-bottom down-arrow, centered just above the input bar.
     // Shown on EVERY viewport (the exported content is always old/scrolled-up, never
     // within a few messages of the live bottom where it would hide).
