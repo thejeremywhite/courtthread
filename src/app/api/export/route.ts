@@ -601,6 +601,11 @@ function applyNup(n){
   // Chat-header name (from Page Setup) + its matched avatar (from the name->photo table).
   var _chromeNm=window._chromeName||'Jessica Arsenault';
   var _chromeAv=_avatarFor(_chromeNm);
+  // The swirl wallpaper is Jessica's custom chat background — keep it ONLY for her; every
+  // other person gets a plain background (white/black) + grey incoming bubbles, like a
+  // default Messenger chat.
+  var _isJessica=/jessica/i.test(_chromeNm);
+  var _inBubBg=d?'#303030':(_isJessica?'#ffffff':'#f1f1f1');
   var pages=_paginate();
   var bezelChTop=bezel?bezel.querySelector(':scope > .phone-chrome-top'):null;
   var bezelChBot=bezel?bezel.querySelector(':scope > .phone-chrome-bottom'):null;
@@ -667,7 +672,8 @@ function applyNup(n){
     // overflow slides BEHIND the header/footer chrome instead of over it.
     var pv=document.createElement('div');
     pv.className='phone-viewport';
-    pv.style.cssText='position:relative;display:block;background:'+innerBg+' url('+bgFull+') center/100% 100% no-repeat;color:'+innerColor+';border:1px solid #9a9a9a;border-radius:0;box-shadow:0 2px 10px rgba(0,0,0,0.3);width:'+phoneW+'px;height:'+phoneH+'px;overflow:hidden;font-size:'+fontSize+'px;word-break:break-word;overflow-wrap:break-word;-webkit-print-color-adjust:exact;print-color-adjust:exact';
+    var _pvBg=_isJessica?(innerBg+' url('+bgFull+') center/100% 100% no-repeat'):innerBg;
+    pv.style.cssText='position:relative;display:block;background:'+_pvBg+';color:'+innerColor+';border:1px solid #9a9a9a;border-radius:0;box-shadow:0 2px 10px rgba(0,0,0,0.3);width:'+phoneW+'px;height:'+phoneH+'px;overflow:hidden;font-size:'+fontSize+'px;word-break:break-word;overflow-wrap:break-word;-webkit-print-color-adjust:exact;print-color-adjust:exact';
     var content=document.createElement('div');
     content.style.cssText='position:absolute;top:0;left:0;right:0;bottom:0;z-index:1;overflow:hidden;padding:'+padTop+'px 10px '+padBot+'px;color:'+innerColor+';background:transparent;box-sizing:border-box';
     for(var m=0;m<pages[p].length;m++){content.appendChild(pages[p][m].cloneNode(true))}
@@ -676,6 +682,9 @@ function applyNup(n){
     if(_chromeAv&&_chromeAv!=='/phone-chrome/profile.png'){
       content.querySelectorAll('.sender-avatar').forEach(function(im){im.src=_chromeAv});
     }
+    // Incoming bubble colour follows the background: white on Jessica's swirl, neutral grey
+    // (#f1f1f1, like a default Messenger chat) on the plain background for everyone else.
+    content.querySelectorAll('.bubble-in,.call-card,.bubble-call').forEach(function(b){b.style.background=_inBubBg});
     pv.appendChild(content);
     var overlay=document.createElement('div');
     overlay.className='phone-chrome-overlay';
