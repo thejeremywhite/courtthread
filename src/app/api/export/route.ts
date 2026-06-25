@@ -237,16 +237,8 @@ export async function POST(request: NextRequest) {
 <h3 style="margin:0 0 16px;font-size:16px;font-weight:600;color:#fff">Page Setup</h3>
 <div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #333">
 <h4 style="margin:0 0 8px;font-size:13px;color:#aaa;text-transform:uppercase;letter-spacing:1px">Header</h4>
-<label style="display:block;margin-bottom:6px">Text: <input type="text" id="ps-hdr-text" oninput="_refreshAvatarPreview()" style="width:100%;padding:6px 8px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;font-size:13px;margin-top:2px" value="${escapeHtml(hdrDefault)}"></label>
-<div style="font-size:11px;color:#888;margin:-2px 0 4px">This also names the phone's chat header and selects the matching profile photo (e.g. "Jessica Arsenault" → her photo, "Waylon White" → his).</div>
-<div style="display:flex;align-items:center;gap:10px;margin-top:8px">
-<img id="ps-avatar-preview" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;background:#333;border:1px solid #555;flex-shrink:0">
-<label style="font-size:12px;cursor:pointer;color:#7db4ff;text-decoration:underline">Upload profile photo<input type="file" id="ps-avatar-file" accept="image/*" onchange="_onAvatarFile(this)" style="display:none"></label>
-<button type="button" onclick="_clearAvatar()" style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #555;background:#333;color:#aaa;cursor:pointer">Reset</button>
-</div>
-<div id="ps-avatar-note" style="font-size:11px;color:#888;margin-top:4px"></div>
-<div style="font-size:11px;color:#aaa;margin-top:8px">Or choose a saved photo (click to use it for this name):</div>
-<div id="ps-avatar-gallery" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px"></div>
+<label style="display:block;margin-bottom:6px">Text: <input type="text" id="ps-hdr-text" style="width:100%;padding:6px 8px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;font-size:13px;margin-top:2px" value="${escapeHtml(hdrDefault)}"></label>
+<div style="font-size:11px;color:#888;margin:-2px 0 4px">The court / provenance header printed at the top of each page — kept separate from the phone chat name below.</div>
 <div style="display:flex;gap:12px;margin-top:12px">
 <label style="flex:1">Font size (px): <input type="number" id="ps-hdr-size" min="6" max="96" step="1" value="12" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px"></label>
 <label style="flex:1">Font: <select id="ps-hdr-font" style="width:100%;padding:4px 6px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;margin-top:2px">
@@ -260,6 +252,18 @@ export async function POST(request: NextRequest) {
 </select></label>
 </div>
 <label style="display:block;margin-top:8px">Distance from top: <input type="range" id="ps-hdr-dist" min="0" max="120" value="14" style="width:100%;margin-top:2px"><span id="ps-hdr-dist-val">14px</span></label>
+</div>
+<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #333">
+<h4 style="margin:0 0 8px;font-size:13px;color:#aaa;text-transform:uppercase;letter-spacing:1px">Phone chat header (name &amp; photo)</h4>
+<div style="display:flex;align-items:center;gap:10px;margin-top:4px">
+<img id="ps-avatar-preview" alt="" style="width:38px;height:38px;border-radius:50%;object-fit:cover;background:#333;border:1px solid #555;flex-shrink:0">
+<label style="font-size:12px;cursor:pointer;color:#7db4ff;text-decoration:underline">Upload profile photo<input type="file" id="ps-avatar-file" accept="image/*" onchange="_onAvatarFile(this)" style="display:none"></label>
+<button type="button" onclick="_clearAvatar()" style="font-size:11px;padding:3px 8px;border-radius:4px;border:1px solid #555;background:#333;color:#aaa;cursor:pointer">Reset</button>
+</div>
+<div id="ps-avatar-note" style="font-size:11px;color:#888;margin-top:4px"></div>
+<div style="font-size:11px;color:#aaa;margin-top:8px">Or choose a saved photo (click to use it for this name):</div>
+<div id="ps-avatar-gallery" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:6px"></div>
+<label style="display:block;margin-top:10px">Name shown in chat header: <input type="text" id="ps-chat-name" oninput="_refreshAvatarPreview()" style="width:100%;padding:6px 8px;background:#2a2a2a;border:1px solid #555;border-radius:4px;color:#eee;font-size:13px;margin-top:2px" value="${escapeHtml(hdrDefault)}"></label>
 </div>
 <div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #333">
 <h4 style="margin:0 0 8px;font-size:13px;color:#aaa;text-transform:uppercase;letter-spacing:1px">Footer</h4>
@@ -333,7 +337,7 @@ function _avatarFor(name){
 // Page Setup avatar preview + upload (uploaded photos are cropped to a square, downscaled,
 // and stored by name; reused automatically on future exports of any chat with that name).
 function _refreshAvatarPreview(){
-  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  var nm=(_val('ps-chat-name')||window._chromeName||'');
   var img=document.getElementById('ps-avatar-preview');if(img)img.src=_avatarFor(nm);
   _renderAvatarGallery();
   var note=document.getElementById('ps-avatar-note');if(!note)return;
@@ -351,7 +355,7 @@ function _renderAvatarGallery(){
   _AVATAR_CHOICES.forEach(function(c){seen[c.src]=1});
   Object.keys(db).forEach(function(k){var s=db[k];if(s&&!seen[s]){seen[s]=1;items.push({label:k,src:s})}});
   g.innerHTML='';
-  var cur=_avatarFor(_val('ps-hdr-text')||window._chromeName||'');
+  var cur=_avatarFor(_val('ps-chat-name')||window._chromeName||'');
   items.forEach(function(it){
     var im=document.createElement('img');im.src=it.src;im.title=it.label;
     im.style.cssText='width:42px;height:42px;border-radius:50%;object-fit:cover;cursor:pointer;background:#333;border:2px solid '+(it.src===cur?'#3578E5':'#555');
@@ -360,7 +364,7 @@ function _renderAvatarGallery(){
   });
 }
 function _pickAvatar(src){
-  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  var nm=(_val('ps-chat-name')||window._chromeName||'');
   if(!nm){alert('Type the name in the Header text first.');return}
   var db=_loadAvatarDB();db[_norm(nm)]=src;_saveAvatarDB(db);
   window._chromeName=nm;_refreshAvatarPreview();_renderAvatarGallery();_rebuildLayout();
@@ -370,7 +374,7 @@ function _pickAvatar(src){
 var _crop=null;
 function _onAvatarFile(input){
   var f=input.files&&input.files[0];if(!f){return}
-  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  var nm=(_val('ps-chat-name')||window._chromeName||'');
   if(!nm){alert('Type the name in the Header text first, then upload.');input.value='';return}
   var rd=new FileReader();
   rd.onload=function(){_openCropper(rd.result,nm)};
@@ -410,7 +414,7 @@ function _cropApply(){
 }
 function _cropCancel(){var d=document.getElementById('ps-crop');if(d)d.style.display='none';_crop=null}
 function _clearAvatar(){
-  var nm=(_val('ps-hdr-text')||window._chromeName||'');
+  var nm=(_val('ps-chat-name')||window._chromeName||'');
   var db=_loadAvatarDB();if(db[_norm(nm)]){delete db[_norm(nm)];_saveAvatarDB(db)}
   _refreshAvatarPreview();_rebuildLayout();
 }
@@ -840,9 +844,10 @@ function applyPageSetup(silent){
   var pns=document.getElementById('ps-pagenum-size');
   window._pageNumSize=pns?(parseInt(pns.value,10)||9):9;
   _applyPageNum();
-  // Phone chat-header name follows the header text; its photo is matched from that name
-  // (built-in people first, then any photo uploaded + saved under that name).
-  window._chromeName=(hdrText&&hdrText.value.trim())?hdrText.value.trim():'Jessica Arsenault';
+  // Phone chat-header name comes from its OWN field (separate from the provenance header
+  // text); the photo is matched from that name (built-in people first, then uploads).
+  var chatNameEl=document.getElementById('ps-chat-name');
+  window._chromeName=(chatNameEl&&chatNameEl.value.trim())?chatNameEl.value.trim():'Jessica Arsenault';
   // The provenance is mirrored into the print table's thead/tfoot, so rebuild to apply.
   _rebuildLayout();
   // silent === true when re-applying saved settings on load; otherwise persist + close.
@@ -900,7 +905,7 @@ function _saveSettings(){
       nup:_curNup,
       view:_val('tb-view'),theme:_val('tb-theme'),from:_val('tb-from'),to:_val('tb-to'),
       ctxBefore:_ctxBefore,ctxAfter:_ctxAfter,
-      ps:{hdrText:_val('ps-hdr-text'),ftrText:_val('ps-ftr-text')}
+      ps:{hdrText:_val('ps-hdr-text'),ftrText:_val('ps-ftr-text'),chatName:_val('ps-chat-name')}
     };
     localStorage.setItem(_SKEY,JSON.stringify(s));
   }catch(e){}
@@ -957,7 +962,7 @@ function _initLayout(){
       // global (applied below) so an applied font/size sticks across every chat.
       var ps=s.ps;
       function setv(id,v){var e=document.getElementById(id);if(e&&v!=null&&v!=='')e.value=v}
-      setv('ps-hdr-text',ps.hdrText);setv('ps-ftr-text',ps.ftrText);
+      setv('ps-hdr-text',ps.hdrText);setv('ps-ftr-text',ps.ftrText);setv('ps-chat-name',ps.chatName);
     }
   }
   // Global page-setup styling (font/size/weight/align/distance/page-numbers) — sticks
