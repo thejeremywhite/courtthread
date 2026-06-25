@@ -426,8 +426,12 @@ function applyNup(n){
   var bgImg=d?'/phone-chrome/dark.png':'/phone-chrome/light.png';
   var padTop=Math.round(phoneH*0.108);
   var padBot=Math.round(phoneH*0.122);
+  // View mode scales the ON-SCREEN preview only (Tablet/Desktop = larger, easier to
+  // read). PRINT ignores this (@media print sets .thread zoom:1) so paper output stays
+  // a fixed physical size regardless of the chosen view.
+  var viewMul=({mobile:1,tablet:1.3,desktop:1.6})[(document.getElementById('tb-view')||{}).value]||1;
   if(bezel){bezel.style.maxWidth='none';bezel.style.padding='0';bezel.style.background='transparent';bezel.style.borderRadius='0';bezel.style.boxShadow='none';bezel.style.border='none'}
-  thread.style.maxWidth='none';thread.style.border='none';thread.style.borderRadius='0';thread.style.padding='0';thread.style.background='transparent';thread.style.overflow='visible';thread.style.zoom='1';thread.style.display='flex';thread.style.justifyContent='center';
+  thread.style.maxWidth='none';thread.style.border='none';thread.style.borderRadius='0';thread.style.padding='0';thread.style.background='transparent';thread.style.overflow='visible';thread.style.zoom=String(viewMul);thread.style.display='flex';thread.style.justifyContent='center';
   thread.innerHTML='';
 
   // Provenance lives in the table's thead/tfoot so the browser REPEATS it on every
