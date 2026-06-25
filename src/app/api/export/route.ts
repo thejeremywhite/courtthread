@@ -352,8 +352,13 @@ function _paginate(){
   var usableH=refH-padTop-padBot;
   // Only filtered-in rows participate (respect the date filter).
   var children=Array.from(thread.children).filter(function(c){return c.style.display!=='none'});
+  // The measurer must match the rendered viewport's CSS exactly or it mis-measures and
+  // clips messages: it carries the .phone-viewport class (so em padding, bubble sizing,
+  // and media max-heights are identical), uses the 16.5px reference font (matching
+  // applyNup), and 10px side padding like the real content area.
   var measurer=document.createElement('div');
-  measurer.style.cssText='position:absolute;left:-9999px;top:0;width:'+viewW+'px;font-size:15px;overflow:visible;visibility:hidden;word-break:break-word;overflow-wrap:break-word';
+  measurer.className='phone-viewport';
+  measurer.style.cssText='position:absolute;left:-9999px;top:0;width:'+viewW+'px;padding:0 10px;font-size:16.5px;overflow:visible;visibility:hidden;border:none;box-shadow:none;background:none;word-break:break-word;overflow-wrap:break-word';
   measurer.style.fontFamily=getComputedStyle(thread).fontFamily;
   document.body.appendChild(measurer);
   function h(el){measurer.innerHTML='';measurer.appendChild(el.cloneNode(true));return measurer.scrollHeight}
@@ -844,8 +849,11 @@ audio.media{width:100%;display:block;margin:4px 0}
 .phone-viewport .msg-text{font-size:inherit}
 .phone-viewport .date-sep{margin:1.33em 0 0.8em}
 .phone-viewport .date-label{font-size:0.867em;letter-spacing:0.02em}
-.phone-viewport img.media,.phone-viewport video.media{max-width:100%;max-height:18.67em;border-radius:0.8em}
-.phone-viewport img.media{cursor:zoom-in}
+.phone-viewport img.media{max-width:100%;max-height:18.67em;border-radius:0.8em;cursor:zoom-in}
+/* Video is LOCKED at 18.67em tall (its original size — never shrink it). Height is FIXED
+   (not max-height) so pagination measures the same whether or not the frame has loaded;
+   width:auto preserves the real aspect ratio (no crop/distort) and max-width caps overflow. */
+.phone-viewport video.media{height:18.67em;width:auto;max-width:100%;object-fit:contain;border-radius:0.8em;background:#000}
 .phone-row{display:flex;justify-content:center;gap:16px;page-break-after:always;page-break-inside:avoid;padding:8px 0;margin:0 auto}
 .thread-bezel{display:flex;flex-direction:column}.thread{flex:1;min-height:0}
 .phone-chrome-top,.phone-chrome-bottom{flex-shrink:0}
