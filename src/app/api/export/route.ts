@@ -863,9 +863,9 @@ body{font-size:11px;padding:0;margin:0;background:#fff!important;-webkit-print-c
 .print-toolbar{display:none!important}
 /* Provenance header/footer ANCHORED to the page edges via position:fixed — they sit in
    the @page margin band (which reserves the space) and repeat on every page. */
-.ct-header,.has-toolbar .ct-header{display:block!important;position:fixed;top:0;left:0.5in;right:0.5in;height:0.8in;padding-top:0.28in;background:transparent;z-index:50}
-.ct-hdr-title{display:block;font-size:11px;font-weight:500;color:#000;text-align:center}
-.ct-footer,.has-toolbar .ct-footer{display:block!important;position:fixed;bottom:0;left:0.5in;right:0.5in;height:0.8in;padding-bottom:0.28in;display:flex;align-items:flex-end;justify-content:center;font-size:9px;color:#333;text-align:center;word-break:break-all;z-index:50}
+.ct-header,.has-toolbar .ct-header{display:flex!important;align-items:center;justify-content:center;position:fixed;top:0;left:0.4in;right:0.4in;height:0.5in;background:#fff;z-index:50}
+.ct-hdr-title{display:block;font-size:11px;font-weight:500;color:#000;text-align:center;width:100%}
+.ct-footer,.has-toolbar .ct-footer{display:flex!important;align-items:center;justify-content:center;position:fixed;bottom:0;left:0.4in;right:0.4in;height:0.5in;background:#fff;font-size:9px;color:#333;text-align:center;word-break:break-all;z-index:50}
 .thread-bezel{display:block!important;max-width:none!important;padding:0;margin:0;box-shadow:none!important;-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact}
 .thread{display:block!important;padding:0;margin:0;overflow:visible;max-width:none!important;background:transparent!important;zoom:1!important}
 .phone-table{margin:0 auto;border-collapse:separate;border-spacing:0.22in 0.28in;width:auto}
