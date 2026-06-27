@@ -209,6 +209,8 @@ export async function POST(request: NextRequest) {
 
     function buildPrintToolbar(title?: string): string {
       const hdrDefault = title || '';
+      // Portable/generic build: blank chrome, no Jessica/Waylon presets baked in.
+      const genericTpl = process.env.CT_GENERIC_TEMPLATE === '1';
       return `<div class="print-toolbar">
 <label>Layout: <select id="nup" onchange="setNup(parseInt(this.value))">
 <option value="1">1-up (single)</option>
@@ -307,19 +309,25 @@ export async function POST(request: NextRequest) {
 </div>
 <script>
 window._chromeTimeStr=${JSON.stringify(chromeTimeStr)};
+window._genericTpl=${genericTpl};
+// What's baked into the chrome PNG: normally "Jessica Arsenault" + her photo; in the
+// portable/generic template the chrome is blank, so the base name/avatar are empty and the
+// Page Setup overlay draws whatever the user configures.
+var _baseName=window._genericTpl?'':'Jessica Arsenault';
+var _baseAvatar=window._genericTpl?'':'/phone-chrome/profile.png';
 // Phone-chat header identity. The chrome PNG has "Jessica Arsenault" + her photo baked in,
 // so that is the default. The chat name FOLLOWS the Page Setup header text (which itself
 // defaults to the source conversation's title); the avatar is matched FROM that name via a
 // small name->photo table below. applyNup draws cover-patch name/photo overlays + swaps the
 // in-chat avatars only when the name/photo differs from the baked-in default.
-window._chromeName='Jessica Arsenault';
+window._chromeName=_baseName;
 var _serverHtml=null;
 var _curNup=1;
 var _ctxBefore=0;var _ctxAfter=0;
 var _viewSizes={mobile:412,tablet:800,desktop:1040};
 // Name -> profile photo table: each person's avatar, used for the chat-header photo AND the
 // little avatars beside their messages. Matched against the header name. Extend as needed.
-var _AVATAR_DB=[{re:/jessica/i,src:'/phone-chrome/profile.png'},{re:/waylon/i,src:'/phone-chrome/profile-waylon.png'}];
+var _AVATAR_DB=window._genericTpl?[]:[{re:/jessica/i,src:'/phone-chrome/profile.png'},{re:/waylon/i,src:'/phone-chrome/profile-waylon.png'}];
 // User-uploaded photos, saved by name in localStorage so they persist across every export
 // in this browser (key = lowercased name -> downscaled data URL).
 var _AVATAR_KEY='ct_blob_avatars_v1';
@@ -332,7 +340,7 @@ function _hasBuiltinAvatar(name){for(var i=0;i<_AVATAR_DB.length;i++){if(_AVATAR
 function _avatarFor(name){
   for(var i=0;i<_AVATAR_DB.length;i++){if(_AVATAR_DB[i].re.test(name||''))return _AVATAR_DB[i].src}
   var db=_loadAvatarDB();var k=_norm(name);if(k&&db[k])return db[k];
-  return '/phone-chrome/profile.png';
+  return _baseAvatar;
 }
 // Page Setup avatar preview + upload (uploaded photos are cropped to a square, downscaled,
 // and stored by name; reused automatically on future exports of any chat with that name).
@@ -347,7 +355,7 @@ function _refreshAvatarPreview(){
 }
 // Built-in photos offered in the picker gallery (so a name like "Facebook user" can be
 // pointed at Waylon's photo without typing his name).
-var _AVATAR_CHOICES=[{label:'Jessica Arsenault',src:'/phone-chrome/profile.png'},{label:'Waylon White',src:'/phone-chrome/profile-waylon.png'}];
+var _AVATAR_CHOICES=window._genericTpl?[]:[{label:'Jessica Arsenault',src:'/phone-chrome/profile.png'},{label:'Waylon White',src:'/phone-chrome/profile-waylon.png'}];
 function _renderAvatarGallery(){
   var g=document.getElementById('ps-avatar-gallery');if(!g)return;
   var items=_AVATAR_CHOICES.slice();
@@ -599,7 +607,7 @@ function applyNup(n){
   var innerBg=d?'#000':'#fff';
   var innerColor=d?'#ededed':'#0a0a0a';
   // Chat-header name (from Page Setup) + its matched avatar (from the name->photo table).
-  var _chromeNm=window._chromeName||'Jessica Arsenault';
+  var _chromeNm=window._chromeName||_baseName;
   var _chromeAv=_avatarFor(_chromeNm);
   // The swirl wallpaper is Jessica's custom chat background — keep it ONLY for her; every
   // other person gets a plain background (white/black) + grey incoming bubbles, like a
@@ -679,7 +687,7 @@ function applyNup(n){
     for(var m=0;m<pages[p].length;m++){content.appendChild(pages[p][m].cloneNode(true))}
     // Swap the in-chat sender/call avatars to the matched person (the source rows are
     // restored from _serverHtml each rebuild, so do it here on the clones).
-    if(_chromeAv&&_chromeAv!=='/phone-chrome/profile.png'){
+    if(_chromeAv&&_chromeAv!==_baseAvatar){
       content.querySelectorAll('.sender-avatar').forEach(function(im){im.src=_chromeAv});
     }
     // Incoming bubble colour follows the background: white on Jessica's swirl, neutral grey
@@ -721,7 +729,7 @@ function applyNup(n){
     // Custom chat name / avatar — drawn over the PNG's baked-in (Jessica) header only when
     // a different person is chosen, so the default stays pixel-perfect. The header bg is a
     // flat colour (light rgb(242,250,253) / dark #000) so the name cover-patch is seamless.
-    if(_chromeAv&&_chromeAv!=='/phone-chrome/profile.png'){
+    if(_chromeAv&&_chromeAv!==_baseAvatar){
       var avD=phoneW*0.10;
       var av=document.createElement('img');
       av.src=_chromeAv;av.setAttribute('alt','');
@@ -729,7 +737,7 @@ function applyNup(n){
       av.onerror=function(){this.style.display='none'};
       pv.appendChild(av);
     }
-    if(_chromeNm&&_chromeNm!=='Jessica Arsenault'){
+    if(_chromeNm&&_chromeNm!==_baseName){
       var nm=document.createElement('div');
       nm.textContent=_chromeNm;
       nm.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.252)+'px;top:'+(phoneH*0.0521)+'px;width:'+(phoneW*0.613)+'px;height:'+(phoneH*0.047)+'px;background:'+(d?'#000':'rgb(242,250,253)')+';display:flex;align-items:center;justify-content:flex-start;white-space:nowrap;overflow:hidden;padding-left:'+(phoneW*0.0193)+'px;font-family:Roboto,Arial,sans-serif;font-weight:700;font-size:'+(phoneH*0.0251)+'px;line-height:1;color:'+(d?'#ffffff':'#050505')+';-webkit-print-color-adjust:exact;print-color-adjust:exact';
@@ -879,7 +887,7 @@ function applyPageSetup(silent){
   // Phone chat-header name comes from its OWN field (separate from the provenance header
   // text); the photo is matched from that name (built-in people first, then uploads).
   var chatNameEl=document.getElementById('ps-chat-name');
-  window._chromeName=(chatNameEl&&chatNameEl.value.trim())?chatNameEl.value.trim():'Jessica Arsenault';
+  window._chromeName=(chatNameEl&&chatNameEl.value.trim())?chatNameEl.value.trim():_baseName;
   // The provenance is mirrored into the print table's thead/tfoot, so rebuild to apply.
   _rebuildLayout();
   _updateDocTitle();   // PDF / save filename follows the chat-header name

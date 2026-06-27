@@ -1,0 +1,41 @@
+CourtThread - Portable
+======================
+
+This is a self-contained copy of the CourtThread app. It runs off this folder
+(e.g. a USB thumb drive) on any 64-bit Windows PC with NOTHING to install -
+no Node.js, no setup. A private Node runtime is bundled in the "node" folder.
+
+HOW TO RUN
+----------
+1. Double-click  "Start CourtThread.bat".
+2. A black window opens (that's the app running) and your browser opens to
+   http://localhost:3000.
+3. To stop the app, close that black window.
+
+If the browser shows an error for a second or two, just refresh - the server
+takes a moment to start the first time.
+
+YOUR DATA IS NOT IN HERE
+------------------------
+On purpose, this portable copy contains the APP ONLY. It does NOT contain your
+messages, your database, or any media - those stay on local storage so private
+evidence never travels on a thumb drive.
+
+- The app keeps its database in the "data" folder next to the launcher. On first
+  run it creates an empty one there. Import your data on this machine, or place
+  an existing courtthread.db into the "data" folder yourself.
+- Media (photos/videos) loads exactly as it does normally: from the original
+  files on local storage. If those drives/paths aren't present on this PC, the
+  text/messages still work but media won't display.
+
+REQUIREMENTS
+------------
+- 64-bit Windows.
+- Port 3000 free (close any other CourtThread/dev server first).
+
+TROUBLESHOOTING
+---------------
+- "Windows protected your PC" / SmartScreen: click "More info" -> "Run anyway"
+  (it's an unsigned .bat, not malware).
+- Nothing opens: make sure the "node" and "app" folders are next to the launcher
+  and weren't separated when copying.
