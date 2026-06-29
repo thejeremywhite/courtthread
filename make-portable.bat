@@ -47,6 +47,12 @@ if exist "node_modules\sql.js\dist\sql-wasm.wasm" (
   copy /y "node_modules\sql.js\dist\sql-wasm.wasm" "%OUT%\app\node_modules\sql.js\dist\" >nul
 )
 mkdir "%OUT%\data"
+REM --- NEVER ship a database (privacy + size): the app makes an empty one at runtime. ---
+if exist "%OUT%\app\data" rmdir /s /q "%OUT%\app\data"
+del /q "%OUT%\data\*.db" "%OUT%\data\*.db-journal" "%OUT%\data\*.db-wal" 2>nul
+REM --- trim deps not needed at runtime: TypeScript (build-only) and sharp/@img (image ---
+REM --- optimization; this app uses plain <img>, not next/image). Saves ~27 MB.        ---
+for %%D in (typescript @img sharp) do if exist "%OUT%\app\node_modules\%%D" rmdir /s /q "%OUT%\app\node_modules\%%D"
 
 echo === [4/5] Fetching private Node runtime (%NODE_VER%) ===
 set "NODE_CACHE=%~dp0.node-cache"
