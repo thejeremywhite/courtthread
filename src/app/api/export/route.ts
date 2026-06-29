@@ -310,16 +310,14 @@ export async function POST(request: NextRequest) {
 <script>
 window._chromeTimeStr=${JSON.stringify(chromeTimeStr)};
 window._genericTpl=${genericTpl};
-// What's baked into the chrome PNG: normally "Jessica Arsenault" + her photo; in the
-// portable/generic template the chrome is blank, so the base name/avatar are empty and the
-// Page Setup overlay draws whatever the user configures.
-var _baseName=window._genericTpl?'':'Jessica Arsenault';
-var _baseAvatar=window._genericTpl?'':'/phone-chrome/profile.png';
-// Phone-chat header identity. The chrome PNG has "Jessica Arsenault" + her photo baked in,
-// so that is the default. The chat name FOLLOWS the Page Setup header text (which itself
-// defaults to the source conversation's title); the avatar is matched FROM that name via a
-// small name->photo table below. applyNup draws cover-patch name/photo overlays + swaps the
-// in-chat avatars only when the name/photo differs from the baked-in default.
+// Phone-chat header identity. _baseName/_baseAvatar are whatever the chrome PNG has baked in
+// (a person + photo normally; both EMPTY in the portable/generic build, which ships a blank
+// chrome). The chat name follows the Page Setup chat-name field (defaulting to the source
+// conversation's title); the avatar is matched from that name via the table below. applyNup
+// draws cover-patch name/photo overlays + swaps in-chat avatars only when they differ from
+// the default. These are emitted server-side so the generic build carries no names at all.
+var _baseName=${JSON.stringify(genericTpl ? '' : 'Jessica Arsenault')};
+var _baseAvatar=${JSON.stringify(genericTpl ? '' : '/phone-chrome/profile.png')};
 window._chromeName=_baseName;
 var _serverHtml=null;
 var _curNup=1;
@@ -327,7 +325,7 @@ var _ctxBefore=0;var _ctxAfter=0;
 var _viewSizes={mobile:412,tablet:800,desktop:1040};
 // Name -> profile photo table: each person's avatar, used for the chat-header photo AND the
 // little avatars beside their messages. Matched against the header name. Extend as needed.
-var _AVATAR_DB=window._genericTpl?[]:[{re:/jessica/i,src:'/phone-chrome/profile.png'},{re:/waylon/i,src:'/phone-chrome/profile-waylon.png'}];
+var _AVATAR_DB=${genericTpl ? '[]' : "[{re:/jessica/i,src:'/phone-chrome/profile.png'},{re:/waylon/i,src:'/phone-chrome/profile-waylon.png'}]"};
 // User-uploaded photos, saved by name in localStorage so they persist across every export
 // in this browser (key = lowercased name -> downscaled data URL).
 var _AVATAR_KEY='ct_blob_avatars_v1';
@@ -336,7 +334,7 @@ function _loadAvatarDB(){try{return JSON.parse(localStorage.getItem(_AVATAR_KEY)
 function _saveAvatarDB(db){try{localStorage.setItem(_AVATAR_KEY,JSON.stringify(db))}catch(e){alert('Could not save the photo (storage may be full).')}}
 function _hasBuiltinAvatar(name){for(var i=0;i<_AVATAR_DB.length;i++){if(_AVATAR_DB[i].re.test(name||''))return true}return false}
 // Resolve a name to a photo: built-in people first, then a photo uploaded under that name,
-// else the default (the chrome PNG's baked-in Jessica photo).
+// else the default (_baseAvatar — the chrome PNG's baked-in photo; empty in generic builds).
 function _avatarFor(name){
   for(var i=0;i<_AVATAR_DB.length;i++){if(_AVATAR_DB[i].re.test(name||''))return _AVATAR_DB[i].src}
   var db=_loadAvatarDB();var k=_norm(name);if(k&&db[k])return db[k];
@@ -353,9 +351,9 @@ function _refreshAvatarPreview(){
   else if(_loadAvatarDB()[_norm(nm)])note.textContent='Using your saved photo for "'+nm+'" (kept for future exports).';
   else note.textContent='No photo matches "'+nm+'". Upload one (you can crop it), or pick a saved photo below.';
 }
-// Built-in photos offered in the picker gallery (so a name like "Facebook user" can be
-// pointed at Waylon's photo without typing his name).
-var _AVATAR_CHOICES=window._genericTpl?[]:[{label:'Jessica Arsenault',src:'/phone-chrome/profile.png'},{label:'Waylon White',src:'/phone-chrome/profile-waylon.png'}];
+// Built-in photos offered in the picker gallery (so a name can be pointed at a saved photo
+// without typing an exact match). Emitted server-side; empty in the generic build.
+var _AVATAR_CHOICES=${genericTpl ? '[]' : "[{label:'Jessica Arsenault',src:'/phone-chrome/profile.png'},{label:'Waylon White',src:'/phone-chrome/profile-waylon.png'}]"};
 function _renderAvatarGallery(){
   var g=document.getElementById('ps-avatar-gallery');if(!g)return;
   var items=_AVATAR_CHOICES.slice();
@@ -423,7 +421,7 @@ function _cropApply(){
 function _cropCancel(){var d=document.getElementById('ps-crop');if(d)d.style.display='none';_crop=null}
 // PDF "Save as" / print filename comes from document.title — make it the phone chat-header
 // NAME (+ the message date range), so a relabeled export saves as e.g.
-// "Waylon White - Dec 29, 2023 - Dec 29, 2023" instead of the raw conversation title.
+// "Contact Name - Dec 29, 2023 - Dec 29, 2023" instead of the raw conversation title.
 function _updateDocTitle(){
   var name=((window._chromeName||'')+'').trim();if(!name)return;
   var ts=[];
@@ -609,10 +607,10 @@ function applyNup(n){
   // Chat-header name (from Page Setup) + its matched avatar (from the name->photo table).
   var _chromeNm=window._chromeName||_baseName;
   var _chromeAv=_avatarFor(_chromeNm);
-  // The swirl wallpaper is Jessica's custom chat background — keep it ONLY for her; every
-  // other person gets a plain background (white/black) + grey incoming bubbles, like a
-  // default Messenger chat.
-  var _isJessica=/jessica/i.test(_chromeNm);
+  // The swirl wallpaper is one person's custom chat background — keep it ONLY for them; every
+  // other person gets a plain background (white/black) + grey incoming bubbles, like a default
+  // Messenger chat. Always off in the generic build (no custom-bg person, no swirl shipped).
+  var _isJessica=${genericTpl ? 'false' : '/jessica/i.test(_chromeNm)'};
   var _inBubBg=d?'#303030':(_isJessica?'#ffffff':'#f1f1f1');
   var pages=_paginate();
   var bezelChTop=bezel?bezel.querySelector(':scope > .phone-chrome-top'):null;
@@ -690,7 +688,7 @@ function applyNup(n){
     if(_chromeAv&&_chromeAv!==_baseAvatar){
       content.querySelectorAll('.sender-avatar').forEach(function(im){im.src=_chromeAv});
     }
-    // Incoming bubble colour follows the background: white on Jessica's swirl, neutral grey
+    // Incoming bubble colour follows the background: white on the swirl, neutral grey
     // (#f1f1f1, like a default Messenger chat) on the plain background for everyone else.
     content.querySelectorAll('.bubble-in,.call-card,.bubble-call').forEach(function(b){b.style.background=_inBubBg});
     pv.appendChild(content);
@@ -726,7 +724,7 @@ function applyNup(n){
       clk.style.cssText='position:absolute;z-index:7;left:'+(phoneW*0.026)+'px;top:'+(phoneH*0.0091)+'px;width:'+(phoneW*0.14)+'px;height:'+(phoneH*0.025)+'px;background:'+(d?'#000':'rgb(242,250,253)')+';display:flex;align-items:center;justify-content:flex-start;white-space:nowrap;overflow:visible;padding-left:'+(phoneW*0.009)+'px;font-family:Roboto,Arial,sans-serif;font-weight:700;font-size:'+(phoneH*0.0163)+'px;line-height:1;color:'+(d?'#ededed':'#45484a')+';-webkit-print-color-adjust:exact;print-color-adjust:exact';
       pv.appendChild(clk);
     }
-    // Custom chat name / avatar — drawn over the PNG's baked-in (Jessica) header only when
+    // Custom chat name / avatar — drawn over the PNG's baked-in (default) header only when
     // a different person is chosen, so the default stays pixel-perfect. The header bg is a
     // flat colour (light rgb(242,250,253) / dark #000) so the name cover-patch is seamless.
     if(_chromeAv&&_chromeAv!==_baseAvatar){

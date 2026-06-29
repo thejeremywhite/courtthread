@@ -41,6 +41,7 @@ Thumbs.db
 CourtThread-Portable/
 node-v*-win-x64/
 node-portable.zip
+.node-cache/
 
 # Claude Code
 .claude/

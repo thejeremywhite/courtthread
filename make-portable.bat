@@ -49,14 +49,15 @@ if exist "node_modules\sql.js\dist\sql-wasm.wasm" (
 mkdir "%OUT%\data"
 
 echo === [4/5] Fetching private Node runtime (%NODE_VER%) ===
-if not exist "%~dp0%NODE_PKG%\node.exe" (
-  powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/%NODE_VER%/%NODE_PKG%.zip' -OutFile '%~dp0node-portable.zip'" || ( echo [X] could not download portable Node & pause & exit /b 1 )
-  powershell -NoProfile -Command "Expand-Archive -Force '%~dp0node-portable.zip' '%~dp0'"
-  del "%~dp0node-portable.zip"
+set "NODE_CACHE=%~dp0.node-cache"
+if not exist "%NODE_CACHE%\%NODE_PKG%\node.exe" (
+  if not exist "%NODE_CACHE%" mkdir "%NODE_CACHE%"
+  powershell -NoProfile -Command "Invoke-WebRequest -Uri 'https://nodejs.org/dist/%NODE_VER%/%NODE_PKG%.zip' -OutFile '%NODE_CACHE%\node.zip'" || ( echo [X] could not download portable Node & pause & exit /b 1 )
+  powershell -NoProfile -Command "Expand-Archive -Force '%NODE_CACHE%\node.zip' '%NODE_CACHE%'"
+  del "%NODE_CACHE%\node.zip"
 )
 mkdir "%OUT%\node"
-copy /y "%~dp0%NODE_PKG%\node.exe" "%OUT%\node\" >nul
-rmdir /s /q "%~dp0%NODE_PKG%"
+copy /y "%NODE_CACHE%\%NODE_PKG%\node.exe" "%OUT%\node\" >nul
 
 echo === [5/5] Adding launcher + readme ===
 copy /y "%~dp0portable\Start CourtThread.bat" "%OUT%\" >nul
