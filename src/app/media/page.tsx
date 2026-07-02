@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef, Suspense, memo } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { DateTimePicker } from "@/components/DateTimePicker";
-import { cleanSourceName } from "@/lib/sourceName";
+import { ImportPicker } from "@/components/ImportPicker";
 
 interface MediaItem {
   media_id: string;
@@ -278,11 +278,9 @@ function MediaGalleryInner() {
   const [availableConversations, setAvailableConversations] = useState<ConversationRow[]>([]);
   const [convSearchText, setConvSearchText] = useState("");
 
-  const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [convDropdownOpen, setConvDropdownOpen] = useState(false);
   const [senderDropdownOpen, setSenderDropdownOpen] = useState(false);
   const [mediaTypeDropdownOpen, setMediaTypeDropdownOpen] = useState(false);
-  const sourceDropRef = useRef<HTMLDivElement>(null);
   const convDropRef = useRef<HTMLDivElement>(null);
   const senderDropRef = useRef<HTMLDivElement>(null);
   const mediaTypeDropRef = useRef<HTMLDivElement>(null);
@@ -414,7 +412,6 @@ function MediaGalleryInner() {
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (sourceDropRef.current && !sourceDropRef.current.contains(e.target as Node)) setSourceDropdownOpen(false);
       if (convDropRef.current && !convDropRef.current.contains(e.target as Node)) setConvDropdownOpen(false);
       if (senderDropRef.current && !senderDropRef.current.contains(e.target as Node)) setSenderDropdownOpen(false);
       if (mediaTypeDropRef.current && !mediaTypeDropRef.current.contains(e.target as Node)) setMediaTypeDropdownOpen(false);
@@ -548,14 +545,6 @@ function MediaGalleryInner() {
     return () => observer.disconnect();
   }, [hasMore, loading, loadingMore, page, loadMedia]);
 
-  function toggleSource(id: string) {
-    setSelectedSources((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-  }
-
   function toggleConversation(id: string) {
     setSelectedConversations((prev) => {
       const next = new Set(prev);
@@ -673,37 +662,8 @@ function MediaGalleryInner() {
       {/* Filters */}
       <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 mb-4 space-y-3">
         <div className="flex flex-wrap gap-3 items-start">
-          {/* Source dropdown */}
-          <div className="relative" ref={sourceDropRef}>
-            <button
-              onClick={() => setSourceDropdownOpen(!sourceDropdownOpen)}
-              className={`px-3 py-2 rounded-lg border text-sm transition min-w-[160px] text-left ${
-                selectedSources.size > 0
-                  ? "border-[var(--primary)] bg-[var(--primary)]/10 text-[var(--primary)]"
-                  : "border-[var(--border)] text-[var(--muted-foreground)] hover:border-[var(--primary)]/50"
-              }`}
-            >
-              {selectedSources.size === 0 ? "Imports" : `${selectedSources.size} import${selectedSources.size > 1 ? "s" : ""}`}
-              <span className="ml-2 opacity-60">▾</span>
-            </button>
-            {sourceDropdownOpen && (
-              <div className="absolute z-50 mt-1 w-80 max-h-64 overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-lg p-2">
-                <div className="flex gap-2 mb-2 px-1">
-                  <button onClick={() => setSelectedSources(new Set(sources.map(s => s.id)))}
-                    className="text-xs text-[var(--primary)] hover:underline">Select all</button>
-                  <button onClick={() => setSelectedSources(new Set())}
-                    className="text-xs text-[var(--destructive)] hover:underline">Deselect all</button>
-                </div>
-                {sources.map((s) => (
-                  <label key={s.id} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-[var(--secondary)] cursor-pointer text-sm">
-                    <input type="checkbox" checked={selectedSources.has(s.id)} onChange={() => toggleSource(s.id)} className="rounded" />
-                    <span className="truncate flex-1">{cleanSourceName(s.filename)}</span>
-                    <span className="text-xs text-[var(--muted-foreground)] shrink-0">{s.message_count} msgs</span>
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* Source dropdown (searchable by import name or participant) */}
+          <ImportPicker sources={sources} selected={selectedSources} onChange={setSelectedSources} multi placeholder="Imports" />
 
           {/* Conversation dropdown */}
           {availableConversations.length > 0 && (

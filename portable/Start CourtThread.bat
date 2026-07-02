@@ -8,6 +8,11 @@ REM --- use a database that lives on local storage instead.                     
 if not exist "%~dp0data" mkdir "%~dp0data"
 set "DB_PATH=%~dp0data\courtthread.db"
 
+REM --- media folder: put your message-export folders (e.g. a Facebook export) in ---
+REM --- here and the app finds their photos/videos automatically on any machine.  ---
+if not exist "%~dp0media" mkdir "%~dp0media"
+set "CT_MEDIA_DIRS=%~dp0media"
+
 REM Port 3177 on purpose - NOT 3000 - so this can never collide with (or silently
 REM open) a dev/main CourtThread server that is already running on the same PC.
 set PORT=3177

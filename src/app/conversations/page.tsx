@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { DateTimePicker } from "@/components/DateTimePicker";
-import { cleanSourceName } from "@/lib/sourceName";
+import { ImportPicker } from "@/components/ImportPicker";
 
 interface ConversationRow {
   id: string;
@@ -137,11 +137,13 @@ export default function ConversationsPage() {
           <option value="">All platforms</option>
           {platforms.map(p => <option key={p} value={p}>{p === "facebook" ? "Facebook" : p === "sms" ? "SMS" : p}</option>)}
         </select>
-        <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)}
-          className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm">
-          <option value="">All sources</option>
-          {sources.map(s => <option key={s.id} value={s.id}>{cleanSourceName(s.filename)}</option>)}
-        </select>
+        <ImportPicker
+          sources={sources}
+          selected={sourceFilter ? new Set([sourceFilter]) : new Set()}
+          onChange={(ids) => setSourceFilter(ids.size ? [...ids][0] : "")}
+          multi={false}
+          placeholder="All sources"
+        />
         <select value={sortOrder} onChange={(e) => { const v = e.target.value as "newest" | "oldest"; setSortOrder(v); try { localStorage.setItem("courtthread_convlist_sort", v); } catch {} }}
           className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm">
           <option value="newest">Newest first</option>

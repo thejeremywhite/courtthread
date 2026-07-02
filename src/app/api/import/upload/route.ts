@@ -18,10 +18,18 @@ import crypto from "crypto";
 import path from "path";
 import fs from "fs";
 
-const SEARCH_DIRS = [
-  "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
-  "D:\\tmp\\fb_zips",
-];
+// CT_MEDIA_DIRS (semicolon-separated) comes first — the portable launcher points it at
+// the "media" folder beside itself, so media auto-links on ANY machine — followed by the
+// legacy dev-machine defaults.
+function searchDirs(): string[] {
+  const dirs = (process.env.CT_MEDIA_DIRS || "")
+    .split(";").map((s) => s.trim()).filter(Boolean);
+  dirs.push(
+    "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
+    "D:\\tmp\\fb_zips",
+  );
+  return dirs;
+}
 
 function extractMediaFilenames(conv: any): string[] {
   const filenames: string[] = [];
@@ -97,8 +105,21 @@ async function autoLinkMediaPath(sourceId: string, uploadPath: string, mediaFile
     return false;
   }
 
+  // Exact relative-path match first: the browser folder picker preserves the export's
+  // internal structure, so if the export folder sits inside a search dir,
+  // <searchDir>\<rawPath> IS this conversation's own folder.
+  for (const sd of searchDirs()) {
+    try {
+      const direct = path.join(sd, rawPath);
+      if (fs.existsSync(direct) && fs.statSync(direct).isDirectory() && hasMediaInDir(direct)) {
+        await setLocalMediaPath(sourceId, direct);
+        return;
+      }
+    } catch { /* skip */ }
+  }
+
   if (folderName && folderName !== "." && !folderName.includes(".")) {
-    for (const sd of SEARCH_DIRS) {
+    for (const sd of searchDirs()) {
       const candidates = findFoldersRecursive(sd, folderName, 8);
       for (const found of candidates) {
         if (hasMediaInDir(found)) {
@@ -111,7 +132,7 @@ async function autoLinkMediaPath(sourceId: string, uploadPath: string, mediaFile
 
   if (mediaFilenames && mediaFilenames.length > 0) {
     const sampleFile = mediaFilenames[0];
-    for (const sd of SEARCH_DIRS) {
+    for (const sd of searchDirs()) {
       try {
         if (!fs.existsSync(sd)) continue;
         const entries = fs.readdirSync(sd);

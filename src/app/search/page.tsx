@@ -6,6 +6,7 @@ import { PatternBuilder } from "@/components/search/PatternBuilder";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { MessageThread, ThreadViewport, ViewModeToggle, useViewMode, useThemeMode, getThemeVars } from "@/app/conversations/[id]/MessageThread";
 import { cleanSourceName } from "@/lib/sourceName";
+import { ImportPicker } from "@/components/ImportPicker";
 
 interface SearchResult {
   id: string;
@@ -294,7 +295,6 @@ function SearchPageInner() {
   const [selectedSenders, setSelectedSenders] = useState<Set<string>>(new Set());
 
   // Dropdowns
-  const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [convDropdownOpen, setConvDropdownOpen] = useState(false);
   const [senderDropdownOpen, setSenderDropdownOpen] = useState(false);
   const [convSearchText, setConvSearchText] = useState("");
@@ -303,7 +303,6 @@ function SearchPageInner() {
   const [participantSuggestions, setParticipantSuggestions] = useState<ParticipantRow[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const suggestRef = useRef<HTMLDivElement>(null);
-  const sourceDropRef = useRef<HTMLDivElement>(null);
   const convDropRef = useRef<HTMLDivElement>(null);
   const senderDropRef = useRef<HTMLDivElement>(null);
 
@@ -451,7 +450,6 @@ function SearchPageInner() {
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (suggestRef.current && !suggestRef.current.contains(e.target as Node)) setShowSuggestions(false);
-      if (sourceDropRef.current && !sourceDropRef.current.contains(e.target as Node)) setSourceDropdownOpen(false);
       if (convDropRef.current && !convDropRef.current.contains(e.target as Node)) setConvDropdownOpen(false);
       if (senderDropRef.current && !senderDropRef.current.contains(e.target as Node)) setSenderDropdownOpen(false);
     }
@@ -467,14 +465,6 @@ function SearchPageInner() {
 
   function removeParticipant(idx: number) {
     setSelectedParticipants((prev) => prev.filter((_, i) => i !== idx));
-  }
-
-  function toggleSource(id: string) {
-    setSelectedSources((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
   }
 
   function togglePlatform(p: string) {
@@ -526,7 +516,7 @@ function SearchPageInner() {
   ];
 
   function removeChip(chip: ScopeChip) {
-    if (chip.type === "source") toggleSource(chip.id);
+    if (chip.type === "source") setSelectedSources((prev) => { const next = new Set(prev); if (next.has(chip.id)) next.delete(chip.id); else next.add(chip.id); return next; });
     else if (chip.type === "platform") togglePlatform(chip.id);
     else if (chip.type === "conversation") toggleConversation(chip.id);
     else if (chip.type === "sender") toggleSender(chip.id);
@@ -1067,56 +1057,14 @@ function SearchPageInner() {
 
         {/* Scope row */}
         <div className="flex flex-wrap gap-3 items-start mb-3">
-          {/* Source dropdown */}
-          <div className="relative" ref={sourceDropRef}>
-            <button
-              onClick={() => setSourceDropdownOpen(!sourceDropdownOpen)}
-              className={`px-3 py-1.5 rounded-lg border text-sm flex items-center gap-2 transition ${
-                selectedSources.size > 0
-                  ? "border-purple-500 bg-purple-500/10 text-purple-300"
-                  : "border-[var(--border)] hover:border-[var(--primary)]/50"
-              }`}
-            >
-              <span>{sourceLabel}</span>
-              <span className="text-[var(--muted-foreground)] text-xs">{sourceDropdownOpen ? "▲" : "▼"}</span>
-            </button>
-
-            {sourceDropdownOpen && (
-              <div className="absolute z-30 top-full left-0 mt-1 w-80 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-xl max-h-72 overflow-y-auto">
-                {sources.length === 0 ? (
-                  <p className="p-3 text-sm text-[var(--muted-foreground)]">No data imported yet</p>
-                ) : (
-                  <>
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)]">
-                      <button
-                        onClick={() => { setSelectedSources(new Set(sources.map(s => s.id))); }}
-                        className="text-xs text-[var(--primary)] hover:underline"
-                      >Select all</button>
-                      <button
-                        onClick={() => { setSelectedSources(new Set()); setSelectedConversations(new Set()); }}
-                        className="text-xs text-[var(--muted-foreground)] hover:underline"
-                      >Deselect all</button>
-                    </div>
-                    {sources.map((src) => (
-                      <button key={src.id} onClick={() => toggleSource(src.id)}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition flex items-center gap-2"
-                      >
-                        <span className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${
-                          selectedSources.has(src.id) ? "border-purple-500 bg-purple-500 text-white" : "border-[var(--border)]"
-                        }`}>
-                          {selectedSources.has(src.id) && "✓"}
-                        </span>
-                        <span className="flex-1 truncate" title={src.filename}>{cleanSourceName(src.filename)}</span>
-                        <span className="text-[10px] text-[var(--muted-foreground)] shrink-0">
-                          {(src.message_count || 0).toLocaleString()} msgs
-                        </span>
-                      </button>
-                    ))}
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+          {/* Source dropdown (searchable by import name or participant) */}
+          <ImportPicker
+            sources={sources}
+            selected={selectedSources}
+            onChange={(ids) => { setSelectedSources(ids); if (ids.size === 0) setSelectedConversations(new Set()); }}
+            multi
+            label={sourceLabel}
+          />
 
           {/* Platform pills */}
           {allPlatforms.length > 1 && (

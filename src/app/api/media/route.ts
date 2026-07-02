@@ -34,15 +34,31 @@ function findFolderRecursive(root: string, folderName: string, maxDepth: number)
   return null;
 }
 
-function resolveSourceDir(db: any, sourceId: string): { dir: string | null; debug?: string; needsPersist?: boolean } {
+// Where to hunt for media folders that browser (upload://) imports can't locate on their
+// own. CT_MEDIA_DIRS (semicolon-separated) comes FIRST — the portable launcher points it
+// at the "media" folder beside itself, so exports dropped there are found on ANY machine —
+// followed by the legacy dev-machine defaults.
+function mediaSearchDirs(): string[] {
+  const dirs = (process.env.CT_MEDIA_DIRS || "")
+    .split(";").map((s) => s.trim()).filter(Boolean);
+  dirs.push(
+    "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
+    "D:\\tmp\\fb_zips",
+    "D:\\Storage Drive I Backup\\facebook-patriciamann-2024-06-08\\Messages",
+  );
+  return dirs;
+}
+
+function resolveSourceDir(db: any, sourceId: string, ignorePersisted = false): { dir: string | null; debug?: string; needsPersist?: boolean } {
   const safeId = sourceId.replace(/'/g, "''");
   const result = db.exec(`SELECT file_path, metadata FROM sources WHERE id = '${safeId}'`);
   const sourcePath = result[0]?.values[0]?.[0] as string | undefined;
   const metadataStr = result[0]?.values[0]?.[1] as string | undefined;
   if (!sourcePath) return { dir: null, debug: `no source row for id=${sourceId}` };
 
-  // Check metadata for a user-linked local media path
-  if (metadataStr) {
+  // Check metadata for a user-linked local media path (skipped when the caller wants a
+  // from-scratch re-search, e.g. after the persisted path stopped producing hits)
+  if (!ignorePersisted && metadataStr) {
     try {
       const meta = JSON.parse(metadataStr);
       if (meta.localMediaPath) {
@@ -77,8 +93,25 @@ function resolveSourceDir(db: any, sourceId: string): { dir: string | null; debu
     }
 
     const uploadRel = sourcePath.replace("upload://", "");
-    const folderName = uploadRel.split(/[/\\]/)[0];
-    if (folderName && folderName !== "." && !folderName.includes(".")) {
+    const segments = uploadRel.split(/[/\\]/).filter(Boolean);
+    const firstSeg = segments[0] || "";
+    const lastSeg = segments[segments.length - 1] || "";
+    const searchDirs = mediaSearchDirs();
+
+    // Exact relative-path match first: the browser folder picker preserves the export's
+    // internal structure (e.g. "<export>/messages/inbox/<convo>"), so if that export
+    // folder sits inside a search dir, <searchDir>\<uploadRel> IS this convo's folder.
+    for (const sd of searchDirs) {
+      try {
+        const direct = path.join(sd, uploadRel);
+        if (fs.existsSync(direct) && fs.statSync(direct).isDirectory()) return { dir: direct, needsPersist: true };
+      } catch {}
+    }
+
+    // Then hunt by folder NAME — the deepest segment (the conversation's own folder)
+    // first, then the top segment (single-folder uploads like "jessicaarsenault_101...").
+    const names = [...new Set([lastSeg, firstSeg])].filter((n) => n && n !== "." && !n.includes("."));
+    for (const folderName of names) {
       const allSources = db.exec(`SELECT file_path FROM sources WHERE file_path NOT LIKE 'upload://%'`);
       for (const row of (allSources[0]?.values || [])) {
         const sp = row[0] as string;
@@ -90,10 +123,6 @@ function resolveSourceDir(db: any, sourceId: string): { dir: string | null; debu
         } catch {}
       }
 
-      const searchDirs = [
-        "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
-        "D:\\tmp\\fb_zips",
-      ];
       for (const sd of searchDirs) {
         const candidate = path.join(sd, folderName);
         try {
@@ -106,7 +135,7 @@ function resolveSourceDir(db: any, sourceId: string): { dir: string | null; debu
       }
     }
 
-    return { dir: null, debug: `upload source (${sourcePath}), could not auto-detect local folder "${folderName}". Use "Link Media" on Import page to set path manually.` };
+    return { dir: null, debug: `upload source (${sourcePath}), could not auto-detect local folder "${lastSeg || firstSeg}". Put the export folder in the app's "media" folder, or use "Link Media" on the Import page.` };
   }
 
   try {
@@ -138,22 +167,11 @@ export async function GET(request: NextRequest) {
     }
 
     const db = await getDb();
-    const { dir: sourceDir, debug, needsPersist } = resolveSourceDir(db, sourceId);
+    const resolved = resolveSourceDir(db, sourceId);
+    const sourceDir = resolved.dir;
     if (!sourceDir) {
-      console.error(`[media] resolve failed for source=${sourceId}: ${debug}`);
-      return NextResponse.json({ error: `Source not found or no local path available`, debug }, { status: 404 });
-    }
-    if (needsPersist) {
-      try {
-        const safeId2 = sourceId.replace(/'/g, "''");
-        const metaResult = db.exec(`SELECT metadata FROM sources WHERE id = '${safeId2}'`);
-        const existing = metaResult[0]?.values[0]?.[0] as string | undefined;
-        let meta: Record<string, unknown> = {};
-        try { meta = JSON.parse(existing || "{}"); } catch {}
-        meta.localMediaPath = sourceDir;
-        db.run(`UPDATE sources SET metadata = ? WHERE id = ?`, [JSON.stringify(meta), sourceId]);
-        scheduleSave();
-      } catch {}
+      console.error(`[media] resolve failed for source=${sourceId}: ${resolved.debug}`);
+      return NextResponse.json({ error: `Source not found or no local path available`, debug: resolved.debug }, { status: 404 });
     }
 
     const subdirs = mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used"]
@@ -164,6 +182,18 @@ export async function GET(request: NextRequest) {
       : ["photos", "gifs", "stickers", "stickers_used", "videos", "audio", "files"];
 
     let filePath = findFile(sourceDir, filename, subdirs);
+    let usedDir = sourceDir;
+
+    // The resolved dir didn't contain the file — re-run the whole search chain ignoring
+    // any persisted localMediaPath. This heals sources whose export was copied into a
+    // media dir AFTER import, and sources poisoned by an earlier wrong guess.
+    if (!filePath) {
+      const fresh = resolveSourceDir(db, sourceId, true);
+      if (fresh.dir && fresh.dir !== sourceDir) {
+        const p2 = findFile(fresh.dir, filename, subdirs);
+        if (p2) { filePath = p2; usedDir = fresh.dir; }
+      }
+    }
 
     if (!filePath) {
       const safeId3 = sourceId!.replace(/'/g, "''");
@@ -173,15 +203,11 @@ export async function GET(request: NextRequest) {
         ? srcPath.replace("upload://", "").split(/[/\\]/).filter(Boolean).pop()
         : null;
       if (folderName2 && folderName2 !== "." && !folderName2.includes(".")) {
-        const fallbackDirs = [
-          "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
-          "D:\\tmp\\fb_zips",
-        ];
-        for (const sd of fallbackDirs) {
+        for (const sd of mediaSearchDirs()) {
           const found = findFolderRecursive(sd, folderName2, 8);
           if (found && found !== sourceDir) {
             const fpath = findFile(found, filename, subdirs);
-            if (fpath) { filePath = fpath; break; }
+            if (fpath) { filePath = fpath; usedDir = found; break; }
           }
         }
       }
@@ -189,6 +215,21 @@ export async function GET(request: NextRequest) {
 
     if (!filePath) {
       return NextResponse.json({ error: `File not found: ${filename}` }, { status: 404 });
+    }
+
+    // Persist the working directory ONLY now that a file was actually served from it.
+    // (Persisting unverified guesses used to poison sources with a wrong root forever.)
+    if (resolved.needsPersist || usedDir !== sourceDir) {
+      try {
+        const safeId2 = sourceId.replace(/'/g, "''");
+        const metaResult = db.exec(`SELECT metadata FROM sources WHERE id = '${safeId2}'`);
+        const existing = metaResult[0]?.values[0]?.[0] as string | undefined;
+        let meta: Record<string, unknown> = {};
+        try { meta = JSON.parse(existing || "{}"); } catch {}
+        meta.localMediaPath = usedDir;
+        db.run(`UPDATE sources SET metadata = ? WHERE id = ?`, [JSON.stringify(meta), sourceId]);
+        scheduleSave();
+      } catch {}
     }
 
     const ext = path.extname(filePath).toLowerCase();

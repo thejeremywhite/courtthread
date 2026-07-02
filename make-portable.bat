@@ -19,12 +19,22 @@ if errorlevel 1 (
   pause & exit /b 1
 )
 
-echo === [1/5] Installing dependencies ===
-call npm install || ( echo [X] npm install failed & pause & exit /b 1 )
+REM Build in a LOCAL copy of the project, outside OneDrive: OneDrive turns fresh .next
+REM files into reparse-point placeholders mid-build (PageNotFoundError / EINVAL readlink).
+REM A .next junction doesn't work either - Node realpaths it and can't resolve the
+REM project's node_modules from C:. So: copy sources local, install+build there.
+set "BUILDROOT=%LOCALAPPDATA%\ct-build\proj"
 
-echo === [2/5] Building production app (standalone) ===
-call npm run build || ( echo [X] build failed & pause & exit /b 1 )
-if not exist ".next\standalone\server.js" (
+echo === [1/5] Copying project to local build dir (outside OneDrive) ===
+robocopy "%~dp0." "%BUILDROOT%" /MIR /XD node_modules .next .git .node-cache CourtThread-Portable data /XF *.db *.db-journal *.db-wal CourtThread-Portable.zip /NFL /NDL /NJH /NJS >nul
+if errorlevel 8 ( echo [X] project copy failed & pause & exit /b 1 )
+
+echo === [2/5] Installing dependencies + building (standalone) ===
+pushd "%BUILDROOT%"
+call npm install || ( popd & echo [X] npm install failed & pause & exit /b 1 )
+call npm run build || ( popd & echo [X] build failed & pause & exit /b 1 )
+popd
+if not exist "%BUILDROOT%\.next\standalone\server.js" (
   echo [X] standalone output missing - is  output: "standalone"  set in next.config.ts?
   pause & exit /b 1
 )
@@ -32,9 +42,11 @@ if not exist ".next\standalone\server.js" (
 echo === [3/5] Assembling portable folder ===
 if exist "%OUT%" rmdir /s /q "%OUT%"
 mkdir "%OUT%\app"
-xcopy /e /i /q /y ".next\standalone\*" "%OUT%\app\" >nul
-xcopy /e /i /q /y ".next\static\*"     "%OUT%\app\.next\static\" >nul
-if exist "public" xcopy /e /i /q /y "public\*" "%OUT%\app\public\" >nul
+xcopy /e /i /q /y "%BUILDROOT%\.next\standalone\*" "%OUT%\app\" >nul
+xcopy /e /i /q /y "%BUILDROOT%\.next\static\*"     "%OUT%\app\.next\static\" >nul
+if exist "%BUILDROOT%\public" xcopy /e /i /q /y "%BUILDROOT%\public\*" "%OUT%\app\public\" >nul
+REM never ship env files the standalone output may have picked up
+del /q "%OUT%\app\.env" "%OUT%\app\.env.local" "%OUT%\app\.env.production" 2>nul
 REM --- strip the case-specific export template (Jessica/Waylon): use the blank/generic ---
 REM --- chrome and remove the private preset photos + Jessica's custom swirl background. ---
 set "PC=%OUT%\app\public\phone-chrome"
@@ -42,9 +54,9 @@ if exist "%PC%\generic-light.png" copy /y "%PC%\generic-light.png" "%PC%\light.p
 if exist "%PC%\generic-dark.png"  copy /y "%PC%\generic-dark.png"  "%PC%\dark.png"  >nul
 del /q "%PC%\generic-light.png" "%PC%\generic-dark.png" "%PC%\profile.png" "%PC%\profile-waylon.png" "%PC%\bg-light.png" "%PC%\bg-dark.png" 2>nul
 REM sql.js loads a .wasm at runtime that output-tracing can miss - copy it explicitly
-if exist "node_modules\sql.js\dist\sql-wasm.wasm" (
+if exist "%BUILDROOT%\node_modules\sql.js\dist\sql-wasm.wasm" (
   if not exist "%OUT%\app\node_modules\sql.js\dist" mkdir "%OUT%\app\node_modules\sql.js\dist"
-  copy /y "node_modules\sql.js\dist\sql-wasm.wasm" "%OUT%\app\node_modules\sql.js\dist\" >nul
+  copy /y "%BUILDROOT%\node_modules\sql.js\dist\sql-wasm.wasm" "%OUT%\app\node_modules\sql.js\dist\" >nul
 )
 mkdir "%OUT%\data"
 REM --- NEVER ship a database (privacy + size): the app makes an empty one at runtime. ---

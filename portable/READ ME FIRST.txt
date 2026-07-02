@@ -24,9 +24,11 @@ evidence never travels on a thumb drive.
 - The app keeps its database in the "data" folder next to the launcher. On first
   run it creates an empty one there. Import your data on this machine, or place
   an existing courtthread.db into the "data" folder yourself.
-- Media (photos/videos) loads exactly as it does normally: from the original
-  files on local storage. If those drives/paths aren't present on this PC, the
-  text/messages still work but media won't display.
+- MEDIA (photos/videos): copy your message-export folder(s) - e.g. the whole
+  "facebook-xxxx-2024-06-08" folder - into the "media" folder next to this
+  launcher BEFORE importing. The app searches "media" automatically, so photos
+  and videos work on any machine. (Already imported without it? Just copy the
+  export into "media" and refresh - it links up on the next view.)
 
 REQUIREMENTS
 ------------

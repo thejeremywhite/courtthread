@@ -251,7 +251,21 @@ export async function getSources() {
      LEFT JOIN (SELECT source_id, COUNT(*) cnt FROM messages GROUP BY source_id) mc ON mc.source_id = s.id
      ORDER BY s.imported_at DESC`
   );
-  return rowsToObjects(result);
+  const sources = rowsToObjects(result) as any[];
+  // Participant names per source — drives the searchable import pickers: typing a
+  // person's name finds every import (incl. group chats) they appear in.
+  const pRes = db.exec(
+    `SELECT c.source_id, GROUP_CONCAT(DISTINCT p.display_name) AS names
+     FROM conversations c
+     JOIN conversation_participants cp ON cp.conversation_id = c.id
+     JOIN participants p ON p.id = cp.participant_id
+     GROUP BY c.source_id`
+  );
+  const namesBySource = new Map<string, string>(
+    (pRes[0]?.values || []).map((r: any[]) => [r[0] as string, (r[1] as string) || ""])
+  );
+  for (const s of sources) s.participant_names = namesBySource.get(s.id) || "";
+  return sources;
 }
 
 // Delete every source that has no messages (e.g. failed/empty imports), plus
