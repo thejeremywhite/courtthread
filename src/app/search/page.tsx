@@ -1447,6 +1447,7 @@ function SearchPageInner() {
                       messages={isExpanded && result.context.length > 1 ? result.context : [result]}
                       platform={result.platform || "facebook"}
                       sourceId={result.source_id || ""}
+                      conversationId={result.conversation_id}
                       bookmarkedIds={bookmarkedIds}
                       onToggleBookmark={toggleResultBookmarkById}
                       highlightText={highlightMatches ? query : undefined}
@@ -1490,6 +1491,7 @@ function SearchPageInner() {
         const convTitle = formattedViewData[0]?.conversation_title || "Messages";
         const plat = formattedViewData[0]?.platform || "facebook";
         const firstSourceId = formattedViewData[0]?.source_id || "";
+        const firstConversationId = formattedViewData[0]?.conversation_id || "";
         const highlightMsgId = formattedViewData.length === 1 ? formattedViewData[0].id : undefined;
 
         const sysDark = typeof window !== 'undefined' && window.matchMedia?.('(prefers-color-scheme: dark)').matches;
@@ -1538,6 +1540,7 @@ function SearchPageInner() {
                   messages={allMsgs}
                   platform={plat}
                   sourceId={firstSourceId}
+                  conversationId={firstConversationId}
                   bookmarkedIds={bookmarkedIds}
                   onToggleBookmark={toggleResultBookmarkById}
                   highlightText={highlightMatches ? query : undefined}

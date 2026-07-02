@@ -402,6 +402,7 @@ export default function ConversationPage() {
           messages={filteredMessages}
           platform={conversation?.platform || "facebook"}
           sourceId={conversation?.source_id || ""}
+          conversationId={id}
           bookmarkedIds={bookmarkedIds}
           onToggleBookmark={handleToggleBookmark}
           highlightText={highlightTerm}

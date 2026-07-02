@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, type RefObject } from "react";
+import { useState, useEffect, useCallback, type RefObject } from "react";
 
 export type ViewMode = "mobile" | "tablet" | "desktop";
 export type ThemeMode = "light" | "dark";
@@ -140,12 +140,37 @@ interface Message {
   metadata: string | null;
 }
 
-interface LightboxMedia {
+interface LightboxSeed {
   url: string;
   type: "image" | "video";
   filename: string;
+}
+
+interface LightboxMedia extends LightboxSeed {
   sender: string;
   timestamp: string;
+  conversationId: string;
+  messageId: string;
+  sourceId: string;
+}
+
+// One item from /api/media/browse, scoped to a conversation — used to build the
+// thread-wide prev/next navigation list for the lightbox.
+interface ThreadMediaItem {
+  media_id: string;
+  media_type: string;
+  original_filename: string | null;
+  message_id: string;
+  content: string | null;
+  timestamp: string;
+  conversation_id: string;
+  source_id: string;
+  sender_name: string;
+  missing?: boolean;
+}
+
+function threadMediaUrl(it: ThreadMediaItem): string {
+  return `/api/media?sourceId=${encodeURIComponent(it.source_id)}&filename=${encodeURIComponent(it.original_filename || "")}&type=${encodeURIComponent(it.media_type)}`;
 }
 
 function formatTime(iso: string): string {
@@ -170,7 +195,7 @@ function DateSeparator({ date }: { date: string }) {
   );
 }
 
-function MediaAttachment({ media, sourceId, onLightbox }: { media: any; sourceId: string; onLightbox: (item: LightboxMedia) => void }) {
+function MediaAttachment({ media, sourceId, onLightbox }: { media: any; sourceId: string; onLightbox: (item: LightboxSeed) => void }) {
   const [imgError, setImgError] = useState(false);
 
   if (!media.filename) {
@@ -195,7 +220,7 @@ function MediaAttachment({ media, sourceId, onLightbox }: { media: any; sourceId
         className="mt-1 rounded-xl max-w-full object-contain cursor-pointer"
         style={{ maxHeight: 280, borderRadius: 12 }}
         loading="lazy"
-        onClick={() => onLightbox({ url: mediaUrl, type: "image", filename: media.filename, sender: "", timestamp: "" })}
+        onClick={() => onLightbox({ url: mediaUrl, type: "image", filename: media.filename })}
       />
     );
   }
@@ -205,7 +230,7 @@ function MediaAttachment({ media, sourceId, onLightbox }: { media: any; sourceId
       <div
         className="mt-1 relative max-w-full bg-black cursor-pointer inline-block overflow-hidden"
         style={{ maxHeight: 280, borderRadius: 12 }}
-        onClick={() => onLightbox({ url: mediaUrl, type: "video", filename: media.filename, sender: "", timestamp: "" })}
+        onClick={() => onLightbox({ url: mediaUrl, type: "video", filename: media.filename })}
       >
         <video
           src={mediaUrl}
@@ -297,6 +322,7 @@ function MessageBubble({
   message,
   platform,
   sourceId,
+  conversationId,
   isBookmarked,
   onToggleBookmark,
   searchHighlight,
@@ -305,6 +331,7 @@ function MessageBubble({
   message: Message;
   platform: string;
   sourceId: string;
+  conversationId: string;
   isBookmarked: boolean;
   onToggleBookmark: () => void;
   searchHighlight?: string;
@@ -338,8 +365,15 @@ function MessageBubble({
   const hasOnlyMedia = hasMedia && !message.content;
   const contentText = message.content?.replace(/\[image: [^\]]+\]/g, "").replace(/\[video: [^\]]+\]/g, "").replace(/\[audio: [^\]]+\]/g, "").trim();
 
-  const handleLightbox = (item: LightboxMedia) => {
-    onLightbox({ ...item, sender: message.sender_name, timestamp: message.timestamp });
+  const handleLightbox = (item: LightboxSeed) => {
+    onLightbox({
+      ...item,
+      sender: message.sender_name,
+      timestamp: message.timestamp,
+      conversationId,
+      messageId: message.id,
+      sourceId: msgSourceId,
+    });
   };
 
   return (
@@ -399,39 +433,120 @@ function MessageBubble({
   );
 }
 
-function MediaLightbox({ item, onClose }: { item: LightboxMedia; onClose: () => void }) {
+// Media preview with prev/next arrows through every photo/video in the SAME conversation
+// (Jeremy: "should not just pop up as a preview, but have the same arrows as the Media
+// page"). Fetches the conversation's full media list once via /api/media/browse and
+// locates the clicked item within it; the seed itself renders immediately (no loading
+// flash) and arrows fade in once that list resolves and finds a match.
+function ThreadLightbox({ seed, onClose }: { seed: LightboxMedia; onClose: () => void }) {
+  const [items, setItems] = useState<ThreadMediaItem[] | null>(null);
+  const [idx, setIdx] = useState(-1); // -1 = not yet resolved / not found -> show seed only
+  const [failed, setFailed] = useState<Set<string>>(new Set());
+
   useEffect(() => {
-    function handleKey(e: KeyboardEvent) { if (e.key === "Escape") onClose(); }
+    let cancelled = false;
+    fetch("/api/media/browse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationIds: [seed.conversationId], sortOrder: "asc", page: 1, limit: 1000 }),
+    }).then((r) => r.json()).then((d) => {
+      if (cancelled) return;
+      const list: ThreadMediaItem[] = d.items || [];
+      let foundIdx = list.findIndex((it) => it.message_id === seed.messageId && it.original_filename === seed.filename);
+      if (foundIdx < 0) foundIdx = list.findIndex((it) => it.original_filename === seed.filename);
+      setItems(list);
+      setIdx(foundIdx);
+    }).catch(() => { if (!cancelled) setItems([]); });
+    return () => { cancelled = true; };
+  }, [seed.conversationId, seed.messageId, seed.filename]);
+
+  const isUsable = useCallback(
+    (it: ThreadMediaItem) => it.media_type !== "audio" && it.missing !== true && !failed.has(it.media_id),
+    [failed]
+  );
+
+  const go = useCallback((dir: 1 | -1) => {
+    if (!items || idx < 0) return;
+    for (let i = idx + dir; i >= 0 && i < items.length; i += dir) {
+      if (isUsable(items[i])) { setIdx(i); return; }
+    }
+  }, [items, idx, isUsable]);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+      else if (e.key === "ArrowLeft") go(-1);
+      else if (e.key === "ArrowRight") go(1);
+    }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, [onClose]);
+  }, [onClose, go]);
+
+  const navItem = items && idx >= 0 ? items[idx] : null;
+  const displayUrl = navItem ? threadMediaUrl(navItem) : seed.url;
+  const displayType: "image" | "video" = navItem ? (navItem.media_type === "video" ? "video" : "image") : seed.type;
+  const displaySender = navItem ? navItem.sender_name : seed.sender;
+  const displayTime = navItem ? navItem.timestamp : seed.timestamp;
+  const displayContent = navItem?.content;
+  const displayConvId = navItem ? navItem.conversation_id : seed.conversationId;
+  const displayMsgId = navItem ? navItem.message_id : seed.messageId;
+
+  let prevOk = false, nextOk = false;
+  if (items && idx >= 0) {
+    for (let i = idx - 1; i >= 0; i--) { if (isUsable(items[i])) { prevOk = true; break; } }
+    for (let i = idx + 1; i < items.length; i++) { if (isUsable(items[i])) { nextOk = true; break; } }
+  }
 
   return (
     <div
       className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center"
       onClick={onClose}
     >
+      {prevOk && (
+        <button
+          onClick={(e) => { e.stopPropagation(); go(-1); }}
+          className="fixed left-4 top-1/2 -translate-y-1/2 z-[102] w-12 h-12 rounded-full bg-black/60 text-white text-2xl flex items-center justify-center hover:bg-black/80 transition"
+        >
+          ‹
+        </button>
+      )}
+      {nextOk && (
+        <button
+          onClick={(e) => { e.stopPropagation(); go(1); }}
+          className="fixed right-4 top-1/2 -translate-y-1/2 z-[102] w-12 h-12 rounded-full bg-black/60 text-white text-2xl flex items-center justify-center hover:bg-black/80 transition"
+        >
+          ›
+        </button>
+      )}
       <div className="relative max-w-[85vw] max-h-[90vh]" onClick={(e) => e.stopPropagation()}>
-        {item.type === "video" ? (
+        {displayType === "video" ? (
           <video
-            key={item.url}
-            src={item.url}
+            key={displayUrl}
+            src={displayUrl}
             className="max-w-[85vw] max-h-[85vh] object-contain"
             controls
             autoPlay
+            onError={() => navItem && setFailed((prev) => new Set(prev).add(navItem.media_id))}
           />
         ) : (
           <img
-            src={item.url}
-            alt={item.filename}
+            src={displayUrl}
+            alt={seed.filename}
             className="max-w-[85vw] max-h-[85vh] object-contain"
+            onError={() => navItem && setFailed((prev) => new Set(prev).add(navItem.media_id))}
           />
         )}
         <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-4 py-2 text-white text-sm">
-          <p>{formatTime(item.timestamp)} — <strong>{item.sender}</strong></p>
-          <a href={item.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">
-            Open full size
-          </a>
+          <p>{formatTime(displayTime)} — <strong>{displaySender}</strong></p>
+          {displayContent && <p className="text-white/70 truncate">{displayContent}</p>}
+          <div className="flex gap-3 mt-0.5">
+            <a href={displayUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">
+              Open full size
+            </a>
+            <a href={`/conversations/${displayConvId}?messageId=${displayMsgId}`} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">
+              Show in conversation
+            </a>
+          </div>
         </div>
         <button
           onClick={onClose}
@@ -448,6 +563,7 @@ export function MessageThread({
   messages,
   platform,
   sourceId,
+  conversationId,
   bookmarkedIds,
   onToggleBookmark,
   highlightText: searchHighlight,
@@ -459,6 +575,8 @@ export function MessageThread({
   messages: Message[];
   platform: string;
   sourceId: string;
+  // Scopes the media lightbox's prev/next arrows to this conversation's full media list.
+  conversationId: string;
   bookmarkedIds: Set<string>;
   onToggleBookmark: (messageId: string) => void;
   highlightText?: string;
@@ -487,6 +605,7 @@ export function MessageThread({
               message={msg}
               platform={platform}
               sourceId={sourceId}
+              conversationId={conversationId}
               isBookmarked={bookmarkedIds.has(msg.id)}
               onToggleBookmark={() => onToggleBookmark(msg.id)}
               searchHighlight={searchHighlight}
@@ -495,7 +614,7 @@ export function MessageThread({
           </div>
         );
       })}
-      {lightboxItem && <MediaLightbox item={lightboxItem} onClose={() => setLightboxItem(null)} />}
+      {lightboxItem && <ThreadLightbox seed={lightboxItem} onClose={() => setLightboxItem(null)} />}
     </div>
   );
 }
