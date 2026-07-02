@@ -156,12 +156,15 @@ export async function insertSource(source: {
   file_size: number;
   checksum: string;
   metadata: string;
+  case_id?: string | null;
+  section_id?: string | null;
 }) {
   const db = await getDb();
   db.run(
-    `INSERT OR REPLACE INTO sources (id, filename, file_path, file_type, file_size, checksum, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [source.id, source.filename, source.file_path, source.file_type, source.file_size, source.checksum, source.metadata]
+    `INSERT OR REPLACE INTO sources (id, filename, file_path, file_type, file_size, checksum, metadata, case_id, section_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [source.id, source.filename, source.file_path, source.file_type, source.file_size, source.checksum, source.metadata,
+     source.case_id || null, source.section_id || null]
   );
   scheduleSave();
 }
@@ -175,12 +178,15 @@ export async function insertConversation(conv: {
   first_message_at: string;
   last_message_at: string;
   metadata: string;
+  case_id?: string | null;
+  section_id?: string | null;
 }) {
   const db = await getDb();
   db.run(
-    `INSERT OR REPLACE INTO conversations (id, title, platform, source_id, message_count, first_message_at, last_message_at, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    [conv.id, conv.title, conv.platform, conv.source_id, conv.message_count, conv.first_message_at, conv.last_message_at, conv.metadata]
+    `INSERT OR REPLACE INTO conversations (id, title, platform, source_id, message_count, first_message_at, last_message_at, metadata, case_id, section_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [conv.id, conv.title, conv.platform, conv.source_id, conv.message_count, conv.first_message_at, conv.last_message_at, conv.metadata,
+     conv.case_id || null, conv.section_id || null]
   );
   scheduleSave();
 }

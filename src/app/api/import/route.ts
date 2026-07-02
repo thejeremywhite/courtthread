@@ -14,7 +14,7 @@ import path from "path";
 
 export async function POST(request: NextRequest) {
   try {
-    const { path: importPath, ownerName = "Jeremy White", importMetadata } = await request.json();
+    const { path: importPath, ownerName = "Jeremy White", importMetadata, caseId = null, sectionId = null } = await request.json();
 
     if (!importPath) {
       return NextResponse.json({ error: "Path is required" }, { status: 400 });
@@ -40,6 +40,8 @@ export async function POST(request: NextRequest) {
       file_size: isDir ? 0 : stat.size,
       checksum,
       metadata: JSON.stringify({ imported_from: importPath, provenance: importMetadata || {} }),
+      case_id: caseId,
+      section_id: sectionId,
     });
 
     let result;
@@ -92,6 +94,8 @@ export async function POST(request: NextRequest) {
         first_message_at: firstMsg.timestamp.toISOString(),
         last_message_at: lastMsg.timestamp.toISOString(),
         metadata: JSON.stringify(conv.metadata || {}),
+        case_id: caseId,
+        section_id: sectionId,
       });
 
       const { getDb } = await import("@/lib/db");

@@ -106,6 +106,8 @@ export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const ownerName = (formData.get("ownerName") as string) || "Jeremy White";
+    const caseId = (formData.get("caseId") as string) || null;
+    const sectionId = (formData.get("sectionId") as string) || null;
     const importMetadataStr = formData.get("importMetadata") as string;
     const importMetadata = importMetadataStr ? JSON.parse(importMetadataStr) : {};
     const files = formData.getAll("files") as File[];
@@ -184,6 +186,8 @@ export async function POST(request: NextRequest) {
           file_size: file.size,
           checksum,
           metadata: JSON.stringify({ uploaded: true, relativePath, provenance: importMetadata }),
+          case_id: caseId,
+          section_id: sectionId,
         });
         await autoLinkMediaPath(sourceId, `upload://${relativePath}`);
 
@@ -209,7 +213,7 @@ export async function POST(request: NextRequest) {
         let messagesForSource = 0;
         for (const conv of conversations) {
           if (conv.messages.length === 0) continue;
-          const result = await importConversation(conv, sourceId, ownerName);
+          const result = await importConversation(conv, sourceId, ownerName, caseId, sectionId);
           conversationsImported += result.conversations;
           messagesImported += result.messages;
           messagesForSource += result.messages;
@@ -249,12 +253,14 @@ export async function POST(request: NextRequest) {
           file_size: groupFiles.reduce((sum, f) => sum + f.content.length, 0),
           checksum,
           metadata: JSON.stringify({ uploaded: true, fileCount: groupFiles.length, provenance: importMetadata }),
+          case_id: caseId,
+          section_id: sectionId,
         });
         const mediaFilenames = extractMediaFilenames(combined);
         await autoLinkMediaPath(sourceId, `upload://${dir}`, mediaFilenames);
 
         if (combined.messages.length > 0) {
-          const result = await importConversation(combined, sourceId, ownerName);
+          const result = await importConversation(combined, sourceId, ownerName, caseId, sectionId);
           conversationsImported += result.conversations;
           messagesImported += result.messages;
           importedSourceIds.push(sourceId);
@@ -290,12 +296,14 @@ export async function POST(request: NextRequest) {
           file_size: groupFiles.reduce((sum, f) => sum + f.content.length, 0),
           checksum,
           metadata: JSON.stringify({ uploaded: true, fileCount: groupFiles.length, provenance: importMetadata }),
+          case_id: caseId,
+          section_id: sectionId,
         });
         const htmlMediaFilenames = extractMediaFilenames(combined);
         await autoLinkMediaPath(sourceId, `upload://${dir}`, htmlMediaFilenames);
 
         if (combined.messages.length > 0) {
-          const result = await importConversation(combined, sourceId, ownerName);
+          const result = await importConversation(combined, sourceId, ownerName, caseId, sectionId);
           conversationsImported += result.conversations;
           messagesImported += result.messages;
           importedSourceIds.push(sourceId);
@@ -330,7 +338,9 @@ export async function POST(request: NextRequest) {
 async function importConversation(
   conv: any,
   sourceId: string,
-  ownerName: string
+  ownerName: string,
+  caseId: string | null = null,
+  sectionId: string | null = null
 ) {
   const convId = uuidv4();
   const participantIds = new Map<string, string>();
@@ -357,6 +367,8 @@ async function importConversation(
     first_message_at: firstMsg.timestamp.toISOString(),
     last_message_at: lastMsg.timestamp.toISOString(),
     metadata: JSON.stringify(conv.metadata || {}),
+    case_id: caseId,
+    section_id: sectionId,
   });
 
   const db = await getDb();
