@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
       sortOrder = "desc",
       page = 1,
       limit = 40,
+      hideMissing = false,
     } = await request.json();
 
     const hasScope = !!(
@@ -151,26 +152,35 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const total = allItems.length;
-    const offset = (page - 1) * limit;
-    const items = allItems.slice(offset, offset + limit);
-
-    // Pre-mark files that don't exist on disk (missing:true) using cheap CACHED source-dir
-    // resolution — the client then renders them as missing WITHOUT issuing a request, so
-    // doomed 404s never clog the browser's connection pool (they made the sidebar nav hang).
+    // Mark files that don't exist on disk (missing:true) using cheap CACHED source-dir
+    // resolution — the client renders those as missing WITHOUT issuing a request, so
+    // doomed 404s never clog the browser's connection pool (they made the sidebar nav
+    // hang). With hideMissing, missing items are dropped SERVER-SIDE before pagination:
+    // every returned page is then full of real, renderable media — otherwise a page of
+    // hidden tiles leaves the viewport empty and the auto-loader chains through the
+    // entire catalog nonstop.
     const dirBySource = new Map<string, string | null>();
-    for (const it of items) {
+    const markMissing = (it: any) => {
       let dir = dirBySource.get(it.source_id);
       if (dir === undefined) {
         try { dir = cachedSourceDir(db, it.source_id); } catch { dir = null; }
         dirBySource.set(it.source_id, dir);
       }
-      if (dir) {
-        it.missing = !findFile(dir, it.original_filename || "", subdirsForType(it.media_type));
-      }
+      if (dir) it.missing = !findFile(dir, it.original_filename || "", subdirsForType(it.media_type));
       // No dir known yet -> leave undefined: the client requests normally and the media
       // route's once-per-source deep hunt gets its chance (then this becomes cheap).
+    };
+
+    let pool = allItems;
+    if (hideMissing) {
+      for (const it of pool) markMissing(it);
+      pool = pool.filter((it) => it.missing !== true);
     }
+
+    const total = pool.length;
+    const offset = (page - 1) * limit;
+    const items = pool.slice(offset, offset + limit);
+    if (!hideMissing) for (const it of items) markMissing(it);
 
     return NextResponse.json({
       items,

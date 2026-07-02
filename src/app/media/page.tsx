@@ -438,6 +438,10 @@ function MediaGalleryInner() {
 
   function buildRequestBody(forPage: number) {
     const body: any = { sortOrder, page: forPage, limit: PAGE_SIZE };
+    // Server-side: skip files confirmed absent so every returned page is full of REAL,
+    // renderable media. (Client-side hiding of whole pages left the viewport empty and
+    // the auto-loader chained through the entire catalog "incessantly".)
+    if (hideMissing) body.hideMissing = true;
     if (selectedSources.size > 0) body.sourceIds = Array.from(selectedSources);
     if (selectedConversations.size > 0) body.conversationIds = Array.from(selectedConversations);
     if (selectedSenders.size > 0) body.senderNames = Array.from(selectedSenders);
@@ -528,9 +532,9 @@ function MediaGalleryInner() {
       setLoadingMore(false);
     }
   }, [selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
-      selectedMediaTypes, dateFrom, dateTo, sortOrder]);
+      selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
 
-  // Auto-search when any filter changes
+  // Auto-search when any filter changes (incl. Hide missing - it's server-side now)
   useEffect(() => {
     const hasScope = selectedSources.size > 0 || selectedConversations.size > 0
       || selectedSenders.size > 0 || selectedPlatforms.size > 0
@@ -539,7 +543,7 @@ function MediaGalleryInner() {
     setPage(1);
     loadMedia(1);
   }, [selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
-      selectedMediaTypes, dateFrom, dateTo, sortOrder]);
+      selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
 
   useEffect(() => {
     const el = observerRef.current;

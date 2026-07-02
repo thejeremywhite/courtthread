@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const navItems = [
@@ -33,7 +32,12 @@ export function Sidebar() {
             (item.href !== "/" && pathname.startsWith(item.href));
           return (
             <li key={item.href}>
-              <Link
+              {/* Plain <a> on purpose (NOT next/link): a full navigation makes the browser
+                  abort EVERYTHING the current page has in flight (image floods, fetches),
+                  so a sidebar click always breaks the page you're leaving — same as typing
+                  the URL in the address bar. Client-side routing queued behind those
+                  requests and made nav clicks feel ignored. */}
+              <a
                 href={item.href}
                 className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition ${
                   isActive
@@ -43,7 +47,7 @@ export function Sidebar() {
               >
                 <span>{item.icon}</span>
                 <span>{item.label}</span>
-              </Link>
+              </a>
             </li>
           );
         })}

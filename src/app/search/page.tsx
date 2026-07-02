@@ -374,6 +374,15 @@ function SearchPageInner() {
       // Do NOT auto-select imports. Selection is explicit: the page loads with
       // nothing selected (or whatever the restored session / conversation scope set),
       // and the user picks what to search. A refresh must not re-select everything.
+      // PRUNE the restored selection against the LIVE import list: after a delete or
+      // re-import the saved ids no longer exist, which left ghost scopes like a raw
+      // UUID chip / "1 import (0 msgs)" filtering every search down to nothing.
+      const liveIds = new Set(srcs.map((s: SourceRow) => s.id));
+      setSelectedSources((prev) => {
+        const kept = new Set([...prev].filter((id) => liveIds.has(id)));
+        if (kept.size !== prev.size) setSelectedConversations(new Set());
+        return kept.size === prev.size ? prev : kept;
+      });
     }).catch(() => {});
     fetch("/api/conversations?limit=0").then((r) => r.json()).then((d) => {
       if (d.platforms) setAllPlatforms(d.platforms);
