@@ -9,7 +9,7 @@ HOW TO RUN
 ----------
 1. Double-click  "Start CourtThread.bat".
 2. A black window opens (that's the app running) and your browser opens to
-   http://localhost:3000.
+   http://localhost:3177.
 3. To stop the app, close that black window.
 
 If the browser shows an error for a second or two, just refresh - the server
@@ -31,7 +31,7 @@ evidence never travels on a thumb drive.
 REQUIREMENTS
 ------------
 - 64-bit Windows.
-- Port 3000 free (close any other CourtThread/dev server first).
+- Port 3177 free (the portable app deliberately avoids port 3000).
 
 TROUBLESHOOTING
 ---------------
