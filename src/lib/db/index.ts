@@ -38,6 +38,20 @@ export async function getDb(): Promise<SqlJsDatabase> {
     database.run("PRAGMA foreign_keys = ON");
     database.run(schema); // CREATE TABLE IF NOT EXISTS … — safe to run every boot
 
+    // Migrations for columns added after a database was first created (CREATE TABLE IF NOT
+    // EXISTS is a no-op on an existing table, so new columns need an explicit ALTER). Each
+    // is wrapped so an existing column doesn't throw and stop startup.
+    const migrations = [
+      "ALTER TABLE conversations ADD COLUMN duplicate_group_id TEXT",
+      // Must run AFTER the ALTER above — on a pre-existing (pre-feature) database the
+      // column doesn't exist until the migration runs, so this can't live in schema.ts
+      // (which runs before migrations and would fail every boot with "no such column").
+      "CREATE INDEX IF NOT EXISTS idx_conversations_dup_group ON conversations(duplicate_group_id)",
+    ];
+    for (const m of migrations) {
+      try { database.run(m); } catch { /* column already exists — fine */ }
+    }
+
     g.__courtthread_db = database;
     g.__courtthread_initPromise = null;
     if (isNew) saveDb(); // only write on first creation, not on every boot

@@ -45,6 +45,14 @@ export async function GET(request: NextRequest) {
     if (dateTo) {
       where += ` AND c.first_message_at <= '${dateTo.replace(/'/g, "''")}'`;
     }
+    // Duplicate conversations (same export imported twice — see findDuplicateGroup) are never
+    // deleted or merged in the DB. For the list view we only show the most complete member of
+    // each duplicate_group_id group; the rest stay in the DB for provenance but are hidden here.
+    where += ` AND c.id = (
+      SELECT c2.id FROM conversations c2
+      WHERE COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c.duplicate_group_id, c.id)
+      ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
+    )`;
 
     const orderCol = "c.last_message_at";
     const orderDir = sort === "oldest" ? "ASC" : "DESC";
@@ -59,7 +67,8 @@ export async function GET(request: NextRequest) {
     }
 
     const query = `
-      SELECT c.*, GROUP_CONCAT(p.display_name, ', ') as participant_names
+      SELECT c.*, GROUP_CONCAT(p.display_name, ', ') as participant_names,
+        (SELECT COUNT(*) FROM conversations c3 WHERE COALESCE(c3.duplicate_group_id, c3.id) = COALESCE(c.duplicate_group_id, c.id)) as duplicate_count
       FROM conversations c
       LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id
       LEFT JOIN participants p ON cp.participant_id = p.id

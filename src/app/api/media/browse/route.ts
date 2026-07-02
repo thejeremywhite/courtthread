@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import { ensureSourceDir, sourceFileIndex } from "@/lib/media-resolver";
+import { getDuplicateGroupIds } from "@/lib/db/queries";
 
 interface MediaEntry {
   filename: string;
@@ -42,6 +43,20 @@ export async function POST(request: NextRequest) {
 
     const db = await getDb();
 
+    // Transparently expand any requested conversation to its full duplicate-group member
+    // set (see findDuplicateGroup) so a conversation-scoped media view — the lightbox, the
+    // conversation page's "Media" button, a Media-page conversation filter — shows every
+    // photo across both import copies, not just whichever copy's id was passed in.
+    let effectiveConversationIds: string[] | undefined = conversationIds;
+    if (conversationIds && conversationIds.length > 0) {
+      const expanded = new Set<string>();
+      for (const cid of conversationIds as string[]) {
+        const { memberIds } = await getDuplicateGroupIds(cid);
+        memberIds.forEach((m) => expanded.add(m));
+      }
+      effectiveConversationIds = Array.from(expanded);
+    }
+
     // Media is stored inside the messages.metadata JSON column as
     // {"media": [{"filename":"x.jpg","localPath":"photos/x.jpg","type":"image"}, ...]}
     // The separate `media` table is not populated by the parsers.
@@ -52,8 +67,8 @@ export async function POST(request: NextRequest) {
       const safe = sourceIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
       where += ` AND m.source_id IN (${safe})`;
     }
-    if (conversationIds && conversationIds.length > 0) {
-      const safe = conversationIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
+    if (effectiveConversationIds && effectiveConversationIds.length > 0) {
+      const safe = effectiveConversationIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
       where += ` AND m.conversation_id IN (${safe})`;
     }
     if (senderNames && senderNames.length > 0) {
@@ -94,7 +109,9 @@ export async function POST(request: NextRequest) {
         m.metadata,
         m.message_type,
         p.display_name as sender_name,
-        c.title as conversation_title
+        c.title as conversation_title,
+        c.message_count as conv_message_count,
+        c.duplicate_group_id as conv_dup_group_id
       FROM messages m
       LEFT JOIN participants p ON m.sender_id = p.id
       LEFT JOIN conversations c ON m.conversation_id = c.id
@@ -135,21 +152,33 @@ export async function POST(request: NextRequest) {
       return m.type || "image";
     }
 
-    const allItems: any[] = [];
+    // Duplicate-group dedup (see findDuplicateGroup): the same export folder imported twice
+    // produces two full copies of a conversation, so the same photo shows up once per copy.
+    // Collapse to one item per (group, sender, timestamp, filename), keeping the copy from
+    // the more complete conversation. Purely a view-layer collapse — nothing is deleted.
+    const dedupMap = new Map<string, any>();
     for (const row of allRows) {
       let meta: any;
       try { meta = JSON.parse(row.metadata); } catch { continue; }
       if (!meta.media || !Array.isArray(meta.media)) continue;
+
+      const groupAnchor = row.conv_dup_group_id || row.conversation_id;
 
       for (const m of meta.media as MediaEntry[]) {
         if (!m.filename && !m.localPath) continue;
         const resolvedType = classifyMedia(m, row.message_type || "");
         if (mediaTypeSet && !mediaTypeSet.has(resolvedType)) continue;
 
-        allItems.push({
+        const originalFilename = m.filename || m.localPath.split(/[/\\]/).pop() || null;
+        const dedupKey = `${groupAnchor}|${row.sender_name}|${row.timestamp}|${originalFilename}`;
+        const convMsgCount = row.conv_message_count || 0;
+        const existing = dedupMap.get(dedupKey);
+        if (existing && existing._convMsgCount >= convMsgCount) continue;
+
+        dedupMap.set(dedupKey, {
           media_id: `${row.message_id}_${m.filename || m.localPath}`,
           media_type: resolvedType,
-          original_filename: m.filename || m.localPath.split(/[/\\]/).pop() || null,
+          original_filename: originalFilename,
           local_path: m.localPath || "",
           message_id: row.message_id,
           content: row.content,
@@ -159,9 +188,14 @@ export async function POST(request: NextRequest) {
           is_incoming: row.is_incoming,
           sender_name: row.sender_name,
           conversation_title: row.conversation_title,
+          _convMsgCount: convMsgCount,
         });
       }
     }
+    const allItems: any[] = Array.from(dedupMap.values()).map((it) => {
+      const { _convMsgCount, ...rest } = it;
+      return rest;
+    });
 
     // Mark files that don't exist on disk (missing:true) using cheap CACHED source-dir
     // resolution — the client renders those as missing WITHOUT issuing a request, so

@@ -12,6 +12,7 @@ import {
   insertMessages,
   deleteSource,
   detectAndApplyOwner,
+  findDuplicateGroup,
 } from "@/lib/db/queries";
 import { getDb, scheduleSave } from "@/lib/db";
 import { v4 as uuidv4 } from "uuid";
@@ -358,6 +359,13 @@ async function importConversation(
   const firstMsg = conv.messages[0];
   const lastMsg = conv.messages[conv.messages.length - 1];
 
+  const duplicateGroupId = await findDuplicateGroup(
+    conv.title,
+    conv.platform,
+    conv.participants,
+    conv.messages.map((m: any) => ({ senderName: m.senderName, timestampMs: m.timestampMs, content: m.content }))
+  );
+
   await insertConversation({
     id: convId,
     title: conv.title,
@@ -369,6 +377,7 @@ async function importConversation(
     metadata: JSON.stringify(conv.metadata || {}),
     case_id: caseId,
     section_id: sectionId,
+    duplicate_group_id: duplicateGroupId,
   });
 
   const db = await getDb();

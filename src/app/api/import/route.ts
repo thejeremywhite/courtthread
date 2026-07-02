@@ -6,6 +6,7 @@ import {
   insertParticipant,
   insertMessages,
   detectAndApplyOwner,
+  findDuplicateGroup,
 } from "@/lib/db/queries";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
@@ -85,6 +86,13 @@ export async function POST(request: NextRequest) {
       const firstMsg = conv.messages[0];
       const lastMsg = conv.messages[conv.messages.length - 1];
 
+      const duplicateGroupId = await findDuplicateGroup(
+        conv.title,
+        conv.platform,
+        conv.participants,
+        conv.messages.map((m: any) => ({ senderName: m.senderName, timestampMs: m.timestampMs, content: m.content }))
+      );
+
       await insertConversation({
         id: convId,
         title: conv.title,
@@ -96,6 +104,7 @@ export async function POST(request: NextRequest) {
         metadata: JSON.stringify(conv.metadata || {}),
         case_id: caseId,
         section_id: sectionId,
+        duplicate_group_id: duplicateGroupId,
       });
 
       const { getDb } = await import("@/lib/db");

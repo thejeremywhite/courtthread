@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS conversations (
   first_message_at TEXT,
   last_message_at TEXT,
   metadata TEXT,
-  created_at TEXT DEFAULT (datetime('now'))
+  created_at TEXT DEFAULT (datetime('now')),
+  duplicate_group_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS participants (

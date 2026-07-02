@@ -1,5 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { getDuplicateGroupIds } from "@/lib/db/queries";
+
+// Drops exact-duplicate messages (same sender name + timestamp + content — i.e. the same
+// real message present in more than one duplicate-group import copy), keeping the first
+// occurrence. Rows are pre-sorted so the "primary" (most complete) copy's version wins ties.
+// Messages unique to a truncated copy have no matching signature and simply pass through —
+// this is the "join them, never duplicate" behavior.
+function dedupeMessageRows(rows: any[]): any[] {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  for (const row of rows) {
+    const key = `${row.sender_name}|${row.timestamp}|${row.content ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+  }
+  return out;
+}
 
 export async function GET(
   request: NextRequest,
@@ -17,17 +35,26 @@ export async function GET(
     const dateTo = request.nextUrl.searchParams.get("dateTo") || "";
     const anchor = request.nextUrl.searchParams.get("anchor") || "";
 
-    const safeId = id.replace(/'/g, "''");
+    const { memberIds, primaryId } = await getDuplicateGroupIds(id);
+    const isGrouped = memberIds.length > 1;
+    const safeIds = memberIds.map((mid) => `'${mid.replace(/'/g, "''")}'`).join(",");
+    const safePrimaryId = primaryId.replace(/'/g, "''");
+    // Tiebreaker so that when two group members have an identical message (same timestamp),
+    // the primary/most-complete copy's row is fetched first and wins the dedup above.
+    const primaryFirst = isGrouped ? `, CASE WHEN m.conversation_id = '${safePrimaryId}' THEN 0 ELSE 1 END` : "";
+    const conversationFilter = isGrouped ? `m.conversation_id IN (${safeIds})` : `m.conversation_id = '${id.replace(/'/g, "''")}'`;
 
     // Anchored load: jump to a specific message anywhere in the thread and return a
     // window of messages around it (filters ignored — this is a direct jump).
     if (anchor) {
       const safeAnchor = anchor.replace(/'/g, "''");
-      const aRes = db.exec(`SELECT timestamp FROM messages WHERE id = '${safeAnchor}' AND conversation_id = '${safeId}'`);
+      const aRes = db.exec(`SELECT timestamp FROM messages WHERE id = '${safeAnchor}' AND ${conversationFilter}`);
       const aTs = aRes[0]?.values[0]?.[0] as string | undefined;
       if (aTs) {
         const beforeWin = 20;
         const afterWin = Math.min(Math.max(limit, 50), 300);
+        // Over-fetch when grouped so that after dedup we still have a full window.
+        const fetchMult = isGrouped ? memberIds.length : 1;
         const toObjs = (res: any): any[] => {
           if (!res || !res[0]) return [];
           const { columns, values } = res[0];
@@ -38,17 +65,19 @@ export async function GET(
         const beforeRes = db.exec(`
           SELECT m.*, p.display_name as sender_name FROM messages m
           LEFT JOIN participants p ON m.sender_id = p.id
-          WHERE m.conversation_id = '${safeId}' AND m.timestamp < '${aTs}'
-          ORDER BY m.timestamp DESC LIMIT ${beforeWin}`);
+          WHERE ${conversationFilter} AND m.timestamp < '${aTs}'
+          ORDER BY m.timestamp DESC${primaryFirst} LIMIT ${beforeWin * fetchMult}`);
         const afterRes = db.exec(`
           SELECT m.*, p.display_name as sender_name FROM messages m
           LEFT JOIN participants p ON m.sender_id = p.id
-          WHERE m.conversation_id = '${safeId}' AND m.timestamp >= '${aTs}'
-          ORDER BY m.timestamp ASC LIMIT ${afterWin}`);
-        const before = toObjs(beforeRes).reverse();
-        const after = toObjs(afterRes);
+          WHERE ${conversationFilter} AND m.timestamp >= '${aTs}'
+          ORDER BY m.timestamp ASC${primaryFirst} LIMIT ${afterWin * fetchMult}`);
+        const before = dedupeMessageRows(toObjs(beforeRes)).reverse().slice(-beforeWin);
+        const after = dedupeMessageRows(toObjs(afterRes)).slice(0, afterWin);
         const rows = [...before, ...after];
-        const totalRes = db.exec(`SELECT COUNT(*) FROM messages WHERE conversation_id = '${safeId}'`);
+        const totalRes = isGrouped
+          ? db.exec(`SELECT COUNT(*) FROM (SELECT DISTINCT p.display_name, m.timestamp, m.content FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter})`)
+          : db.exec(`SELECT COUNT(*) FROM messages WHERE ${conversationFilter}`);
         const total = (totalRes[0]?.values[0]?.[0] as number) || 0;
         const hasMore = after.length >= afterWin;
         return NextResponse.json({
@@ -60,7 +89,7 @@ export async function GET(
       }
     }
 
-    let where = `WHERE m.conversation_id = '${safeId}'`;
+    let where = `WHERE ${conversationFilter}`;
 
     if (sender) {
       where += ` AND p.display_name = '${sender.replace(/'/g, "''")}'`;
@@ -82,14 +111,16 @@ export async function GET(
     }
 
     const order = direction === "forward" ? "ASC" : "DESC";
+    // Over-fetch when grouped so dedup still leaves a full page.
+    const fetchMult = isGrouped ? memberIds.length : 1;
 
     const query = `
       SELECT m.*, p.display_name as sender_name
       FROM messages m
       LEFT JOIN participants p ON m.sender_id = p.id
       ${where}
-      ORDER BY m.timestamp ${order}
-      LIMIT ${limit + 1}
+      ORDER BY m.timestamp ${order}${primaryFirst}
+      LIMIT ${(limit + 1) * fetchMult}
     `;
 
     const result = db.exec(query);
@@ -102,24 +133,25 @@ export async function GET(
         return obj;
       });
     }
+    if (isGrouped) rows = dedupeMessageRows(rows);
 
     const hasMore = rows.length > limit;
     if (hasMore) rows = rows.slice(0, limit);
     if (direction === "backward") rows.reverse();
 
-    let countWhere = `WHERE conversation_id = '${safeId}'`;
-    if (sender) {
-      countWhere = `WHERE m.conversation_id = '${safeId}'`;
-      if (dateFrom) countWhere += ` AND m.timestamp >= '${dateFrom.replace(/'/g, "''")}'`;
-      if (dateTo) countWhere += ` AND m.timestamp <= '${dateTo.replace(/'/g, "''")}'`;
-    }
     let totalQuery: string;
-    if (sender) {
-      totalQuery = `SELECT COUNT(*) FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE m.conversation_id = '${safeId}' AND p.display_name = '${sender.replace(/'/g, "''")}'`;
+    if (isGrouped) {
+      totalQuery = `SELECT COUNT(*) FROM (SELECT DISTINCT p.display_name, m.timestamp, m.content FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter}`;
+      if (sender) totalQuery += ` AND p.display_name = '${sender.replace(/'/g, "''")}'`;
+      if (dateFrom) totalQuery += ` AND m.timestamp >= '${dateFrom.replace(/'/g, "''")}'`;
+      if (dateTo) totalQuery += ` AND m.timestamp <= '${dateTo.replace(/'/g, "''")}'`;
+      totalQuery += ")";
+    } else if (sender) {
+      totalQuery = `SELECT COUNT(*) FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter} AND p.display_name = '${sender.replace(/'/g, "''")}'`;
       if (dateFrom) totalQuery += ` AND m.timestamp >= '${dateFrom.replace(/'/g, "''")}'`;
       if (dateTo) totalQuery += ` AND m.timestamp <= '${dateTo.replace(/'/g, "''")}'`;
     } else {
-      totalQuery = `SELECT COUNT(*) FROM messages m WHERE m.conversation_id = '${safeId}'`;
+      totalQuery = `SELECT COUNT(*) FROM messages m WHERE ${conversationFilter}`;
       if (dateFrom) totalQuery += ` AND m.timestamp >= '${dateFrom.replace(/'/g, "''")}'`;
       if (dateTo) totalQuery += ` AND m.timestamp <= '${dateTo.replace(/'/g, "''")}'`;
     }

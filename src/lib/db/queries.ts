@@ -64,6 +64,132 @@ export async function getConversation(id: string) {
   return rows[0] || null;
 }
 
+// Resolves the full set of conversation ids that are duplicate copies of the same
+// real-world thread as `id` (see findDuplicateGroup — never merged/deleted in the DB, only
+// linked via duplicate_group_id). `primaryId` is the most complete copy (highest
+// message_count), used as the tie-breaker when two copies contain an identical message.
+export async function getDuplicateGroupIds(id: string): Promise<{ memberIds: string[]; primaryId: string }> {
+  const db = await getDb();
+  const safeId = id.replace(/'/g, "''");
+  const res = db.exec(`
+    SELECT c2.id FROM conversations c2
+    WHERE COALESCE(c2.duplicate_group_id, c2.id) = (
+      SELECT COALESCE(duplicate_group_id, id) FROM conversations WHERE id = '${safeId}'
+    )
+    ORDER BY c2.message_count DESC, c2.id ASC
+  `);
+  const memberIds = (res[0]?.values || []).map((r: any[]) => r[0] as string);
+  if (memberIds.length === 0) return { memberIds: [id], primaryId: id };
+  return { memberIds, primaryId: memberIds[0] };
+}
+
+// One-time (re-runnable) retroactive scan: links EXISTING conversations imported before
+// findDuplicateGroup existed. Same matching rule (normalized title + platform + identical
+// participant name set + at least one overlapping message signature), but pairwise across
+// the whole table via union-find so a group can have more than 2 members. Never deletes or
+// merges rows — only sets duplicate_group_id, same as the live import-time check.
+export async function backfillDuplicateGroups(): Promise<{
+  groupsLinked: number;
+  conversationsLinked: number;
+  details: Array<{ primary: string; primaryTitle: string; linked: string[] }>;
+}> {
+  const db = await getDb();
+  const convRes = db.exec(
+    `SELECT id, title, platform, message_count, first_message_at, last_message_at, duplicate_group_id FROM conversations`
+  );
+  const convs = rowsToObjects(convRes);
+
+  const buckets = new Map<string, any[]>();
+  for (const c of convs) {
+    const key = `${(c.title || "").trim().toLowerCase()}|${c.platform}`;
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key)!.push(c);
+  }
+
+  const participantsCache = new Map<string, Set<string>>();
+  const getParticipants = (id: string): Set<string> => {
+    if (participantsCache.has(id)) return participantsCache.get(id)!;
+    const safeId = id.replace(/'/g, "''");
+    const res = db.exec(
+      `SELECT DISTINCT p.display_name FROM conversation_participants cp
+       JOIN participants p ON p.id = cp.participant_id WHERE cp.conversation_id = '${safeId}'`
+    );
+    const set = new Set((res[0]?.values || []).map((r: any[]) => (r[0] as string).trim().toLowerCase()));
+    participantsCache.set(id, set);
+    return set;
+  };
+
+  const sigCache = new Map<string, Set<string>>();
+  const getSignatures = (id: string): Set<string> => {
+    if (sigCache.has(id)) return sigCache.get(id)!;
+    const safeId = id.replace(/'/g, "''");
+    const res = db.exec(
+      `SELECT p.display_name, m.timestamp_ms, m.content FROM messages m
+       LEFT JOIN participants p ON m.sender_id = p.id WHERE m.conversation_id = '${safeId}'`
+    );
+    const set = new Set((res[0]?.values || []).map((r: any[]) => `${r[0]}|${r[1]}|${r[2] || ""}`));
+    sigCache.set(id, set);
+    return set;
+  };
+
+  const parent = new Map<string, string>();
+  for (const c of convs) parent.set(c.id, c.id);
+  const find = (x: string): string => {
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    return root;
+  };
+  const union = (a: string, b: string) => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(ra, rb);
+  };
+
+  for (const [, list] of buckets) {
+    if (list.length < 2) continue;
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        if (a.last_message_at < b.first_message_at || b.last_message_at < a.first_message_at) continue;
+        const pa = getParticipants(a.id), pb = getParticipants(b.id);
+        if (pa.size !== pb.size || ![...pa].every((n) => pb.has(n))) continue;
+        const sa = getSignatures(a.id), sb = getSignatures(b.id);
+        let overlap = false;
+        for (const s of sa) { if (sb.has(s)) { overlap = true; break; } }
+        if (overlap) union(a.id, b.id);
+      }
+    }
+  }
+
+  const groups = new Map<string, any[]>();
+  for (const c of convs) {
+    const root = find(c.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root)!.push(c);
+  }
+
+  let groupsLinked = 0;
+  let conversationsLinked = 0;
+  const details: Array<{ primary: string; primaryTitle: string; linked: string[] }> = [];
+  for (const [, members] of groups) {
+    if (members.length < 2) continue;
+    members.sort((x, y) => (y.message_count || 0) - (x.message_count || 0) || (x.id < y.id ? -1 : 1));
+    const primary = members[0];
+    const rest = members.slice(1);
+    for (const m of rest) {
+      db.run(`UPDATE conversations SET duplicate_group_id = ? WHERE id = ?`, [primary.id, m.id]);
+    }
+    if (primary.duplicate_group_id) {
+      db.run(`UPDATE conversations SET duplicate_group_id = NULL WHERE id = ?`, [primary.id]);
+    }
+    groupsLinked++;
+    conversationsLinked += rest.length;
+    details.push({ primary: primary.id, primaryTitle: primary.title, linked: rest.map((r) => r.id) });
+  }
+
+  scheduleSave();
+  return { groupsLinked, conversationsLinked, details };
+}
+
 export async function getMessages(
   conversationId: string,
   order: "ASC" | "DESC" = "ASC",
@@ -180,15 +306,79 @@ export async function insertConversation(conv: {
   metadata: string;
   case_id?: string | null;
   section_id?: string | null;
+  duplicate_group_id?: string | null;
 }) {
   const db = await getDb();
   db.run(
-    `INSERT OR REPLACE INTO conversations (id, title, platform, source_id, message_count, first_message_at, last_message_at, metadata, case_id, section_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO conversations (id, title, platform, source_id, message_count, first_message_at, last_message_at, metadata, case_id, section_id, duplicate_group_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [conv.id, conv.title, conv.platform, conv.source_id, conv.message_count, conv.first_message_at, conv.last_message_at, conv.metadata,
-     conv.case_id || null, conv.section_id || null]
+     conv.case_id || null, conv.section_id || null, conv.duplicate_group_id || null]
   );
   scheduleSave();
+}
+
+// Detect whether a conversation about to be imported is the SAME real-world thread as one
+// already in the database (the same export folder uploaded twice, or Facebook's own
+// "inbox" + "archived_threads" duplicate of one conversation). NEVER deletes or merges any
+// row — returns a duplicate_group_id to LINK them so the app's views can present the group
+// as one conversation (messages deduped-by-content for display, unioning truncated/
+// complementary imports) while every original row stays intact for provenance.
+//
+// Matching is: same normalized title + platform + IDENTICAL participant name set (avoids
+// false-positive merges of two different chats that happen to share a generic name), with
+// an overlapping date range as a cheap SQL pre-filter, confirmed by finding at least one
+// message with an identical (sender, timestamp_ms, content) signature in both.
+export async function findDuplicateGroup(
+  title: string,
+  platform: string,
+  participantNames: string[],
+  messages: Array<{ senderName: string; timestampMs: number; content: string | null }>
+): Promise<string | null> {
+  if (messages.length === 0) return null;
+  const db = await getDb();
+  const normTitle = (title || "").trim().toLowerCase().replace(/'/g, "''");
+  const safePlatform = platform.replace(/'/g, "''");
+  const minTs = new Date(Math.min(...messages.map((m) => m.timestampMs))).toISOString();
+  const maxTs = new Date(Math.max(...messages.map((m) => m.timestampMs))).toISOString();
+
+  const res = db.exec(`
+    SELECT c.id, c.duplicate_group_id
+    FROM conversations c
+    WHERE LOWER(TRIM(c.title)) = '${normTitle}'
+      AND c.platform = '${safePlatform}'
+      AND c.first_message_at <= '${maxTs}' AND c.last_message_at >= '${minTs}'
+  `);
+  const candidates = (res[0]?.values || []).map((r: any[]) => ({ id: r[0] as string, groupId: r[1] as string | null }));
+  if (candidates.length === 0) return null;
+
+  const wantedNames = new Set(participantNames.map((n) => n.trim().toLowerCase()));
+  const incomingSigs = new Set(messages.map((m) => `${m.senderName}|${m.timestampMs}|${m.content || ""}`));
+
+  for (const cand of candidates) {
+    const safeCandId = cand.id.replace(/'/g, "''");
+    const pRes = db.exec(`
+      SELECT DISTINCT p.display_name FROM conversation_participants cp
+      JOIN participants p ON p.id = cp.participant_id
+      WHERE cp.conversation_id = '${safeCandId}'
+    `);
+    const candNames = new Set((pRes[0]?.values || []).map((r: any[]) => (r[0] as string).trim().toLowerCase()));
+    if (candNames.size !== wantedNames.size || ![...wantedNames].every((n) => candNames.has(n))) continue;
+
+    const mRes = db.exec(`
+      SELECT m.timestamp_ms, m.content, p2.display_name
+      FROM messages m JOIN participants p2 ON m.sender_id = p2.id
+      WHERE m.conversation_id = '${safeCandId}'
+    `);
+    const candMsgs = mRes[0]?.values || [];
+    let overlap = false;
+    for (const row of candMsgs) {
+      const sig = `${row[2]}|${row[0]}|${row[1] || ""}`;
+      if (incomingSigs.has(sig)) { overlap = true; break; }
+    }
+    if (overlap) return cand.groupId || cand.id;
+  }
+  return null;
 }
 
 export async function insertParticipant(participant: {
@@ -251,10 +441,20 @@ export async function getSources() {
   const result = db.exec(
     `SELECT s.*,
        COALESCE(cc.cnt, 0) as conversation_count,
-       COALESCE(mc.cnt, 0) as message_count
+       COALESCE(mc.cnt, 0) as message_count,
+       COALESCE(dc.cnt, 0) as duplicate_conversation_count
      FROM sources s
      LEFT JOIN (SELECT source_id, COUNT(*) cnt FROM conversations GROUP BY source_id) cc ON cc.source_id = s.id
      LEFT JOIN (SELECT source_id, COUNT(*) cnt FROM messages GROUP BY source_id) mc ON mc.source_id = s.id
+     LEFT JOIN (
+       SELECT c.source_id, COUNT(*) cnt FROM conversations c
+       WHERE c.id != (
+         SELECT c2.id FROM conversations c2
+         WHERE COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c.duplicate_group_id, c.id)
+         ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
+       )
+       GROUP BY c.source_id
+     ) dc ON dc.source_id = s.id
      ORDER BY s.imported_at DESC`
   );
   const sources = rowsToObjects(result) as any[];

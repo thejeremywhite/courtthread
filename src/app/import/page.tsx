@@ -21,6 +21,7 @@ interface SourceRow {
   imported_at: string;
   conversation_count: number;
   message_count: number;
+  duplicate_conversation_count: number;
   metadata: string;
 }
 
@@ -619,6 +620,13 @@ export default function ImportPage() {
                           <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] ${plat.cls}`}>{plat.label}</span>
                           <p className="text-sm font-medium truncate">{cleanSourceName(src.filename)}</p>
                           {isEmpty && <span className="shrink-0 text-[10px] text-[var(--destructive)]">empty</span>}
+                          {src.duplicate_conversation_count > 0 && (
+                            <span
+                              title="These conversations are already present in an earlier import — the same export was uploaded more than once. Nothing is deleted; the app just shows the more complete copy and hides this one from lists."
+                              className="shrink-0 px-1.5 py-0.5 rounded text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                              {src.duplicate_conversation_count} duplicate{src.duplicate_conversation_count !== 1 ? "s" : ""} of an earlier import
+                            </span>
+                          )}
                         </div>
                         <p className="text-xs text-[var(--muted-foreground)] mt-0.5">
                           {src.conversation_count} conv &middot; {(src.message_count || 0).toLocaleString()} msgs &middot; {formatSize(src.file_size)} &middot; {new Date(src.imported_at).toLocaleDateString()}
