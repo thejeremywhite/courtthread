@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { cachedSourceDir, findFile, subdirsForType } from "@/lib/media-resolver";
+import { ensureSourceDir, sourceFileIndex } from "@/lib/media-resolver";
 
 interface MediaEntry {
   filename: string;
@@ -159,16 +159,21 @@ export async function POST(request: NextRequest) {
     // every returned page is then full of real, renderable media — otherwise a page of
     // hidden tiles leaves the viewport empty and the auto-loader chains through the
     // entire catalog nonstop.
-    const dirBySource = new Map<string, string | null>();
+    // ensureSourceDir settles each source's folder ONCE (deep hunt cached both ways), and
+    // sourceFileIndex makes each per-file check an in-memory lookup (no fs syscalls in the
+    // hot path). Both make missing/present DETERMINISTIC across page requests — an
+    // unstable pool shifted page boundaries and reshuffled the grid mid-scroll.
+    const idxBySource = new Map<string, Map<string, string> | null>();
     const markMissing = (it: any) => {
-      let dir = dirBySource.get(it.source_id);
-      if (dir === undefined) {
-        try { dir = cachedSourceDir(db, it.source_id); } catch { dir = null; }
-        dirBySource.set(it.source_id, dir);
+      let idx = idxBySource.get(it.source_id);
+      if (idx === undefined) {
+        try {
+          const dir = ensureSourceDir(db, it.source_id);
+          idx = dir ? sourceFileIndex(dir, it.source_id) : null;
+        } catch { idx = null; }
+        idxBySource.set(it.source_id, idx);
       }
-      if (dir) it.missing = !findFile(dir, it.original_filename || "", subdirsForType(it.media_type));
-      // No dir known yet -> leave undefined: the client requests normally and the media
-      // route's once-per-source deep hunt gets its chance (then this becomes cheap).
+      it.missing = idx ? !idx.has((it.original_filename || "").toLowerCase()) : true;
     };
 
     let pool = allItems;

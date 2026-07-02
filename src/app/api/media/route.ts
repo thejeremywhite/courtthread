@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, scheduleSave } from "@/lib/db";
-import { resolveSourceDir, findFile, subdirsForType, dirCache as _dirCache, failCache as _failCache, FAIL_TTL_MS } from "@/lib/media-resolver";
+import { resolveSourceDir, findFile, subdirsForType, sourceFileIndex, dirCache as _dirCache, failCache as _failCache, FAIL_TTL_MS } from "@/lib/media-resolver";
 import fs from "fs";
 import path from "path";
 
@@ -29,7 +29,10 @@ export async function GET(request: NextRequest) {
 
     const subdirs = subdirsForType(mediaType);
 
-    let filePath = sourceDir ? findFile(sourceDir, filename, subdirs) : null;
+    // In-memory file index first (zero fs syscalls); findFile as fallback.
+    let filePath = sourceDir
+      ? (sourceFileIndex(sourceDir, sourceId).get(filename.toLowerCase()) || findFile(sourceDir, filename, subdirs))
+      : null;
     let usedDir = sourceDir;
 
     // No directory known for this source at all — run the DEEP hunt (drive walk), but at

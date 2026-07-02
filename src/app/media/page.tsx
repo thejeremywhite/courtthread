@@ -545,13 +545,26 @@ function MediaGalleryInner() {
   }, [selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
       selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
 
+  // HARD CAP on pages loaded without a real user scroll: a runaway chain once appended
+  // the whole catalog and froze the tab under thousands of DOM nodes. Scrolling resets it.
+  const autoChainRef = useRef(0);
+  useEffect(() => {
+    const onScroll = () => { autoChainRef.current = 0; };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
   useEffect(() => {
     const el = observerRef.current;
     if (!el) return;
     const maybeLoad = () => {
       if (!hasMore || loading || loadingMore || !hasSearchedRef.current) return;
+      if (autoChainRef.current >= 3) return; // wait for a real scroll before continuing
       const rect = el.getBoundingClientRect();
-      if (rect.top < window.innerHeight + 400) loadMedia(page + 1, true);
+      if (rect.top < window.innerHeight + 400) {
+        autoChainRef.current += 1;
+        loadMedia(page + 1, true);
+      }
     };
     const observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting) maybeLoad();
@@ -563,7 +576,7 @@ function MediaGalleryInner() {
     maybeLoad();
     // Belt-and-braces: intersection events can be missed while the user rests at the
     // bottom (Jeremy: "it just sits there until I scroll up and back down"). A cheap
-    // periodic visibility re-check guarantees the next page always loads.
+    // periodic visibility re-check guarantees the next page loads — capped above.
     const tick = setInterval(maybeLoad, 700);
     return () => { observer.disconnect(); clearInterval(tick); };
   }, [hasMore, loading, loadingMore, page, loadMedia]);

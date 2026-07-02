@@ -130,13 +130,17 @@ export function resolveSourceDir(db: any, sourceId: string, ignorePersisted = fa
     const searchDirs = mediaSearchDirs();
 
     // Exact relative-path match first: the browser folder picker preserves the export's
-    // internal structure (e.g. "<export>/messages/inbox/<convo>"), so if that export
-    // folder sits inside a search dir, <searchDir>\<uploadRel> IS this convo's folder.
+    // internal structure, so <searchDir>\<uploadRel> IS this convo's folder — also tried
+    // under Facebook's standard middles, because picking the "inbox"/"archived_threads"
+    // folder itself yields relative paths WITHOUT the "messages\" prefix that exists on
+    // disk (e.g. upload://archived_threads/x vs <export>\messages\archived_threads\x).
     for (const sd of searchDirs) {
-      try {
-        const direct = path.join(sd, uploadRel);
-        if (fs.existsSync(direct) && fs.statSync(direct).isDirectory()) return { dir: direct, needsPersist: true };
-      } catch {}
+      for (const mid of ["", "messages", "your_activity_across_facebook\\messages"]) {
+        try {
+          const direct = mid ? path.join(sd, mid, uploadRel) : path.join(sd, uploadRel);
+          if (fs.existsSync(direct) && fs.statSync(direct).isDirectory()) return { dir: direct, needsPersist: true };
+        } catch {}
+      }
     }
 
     // General machine-independent resolve: find the export ROOT anywhere on local storage,
@@ -214,5 +218,43 @@ export function cachedSourceDir(db: any, sourceId: string): string | null {
   if (hit) return hit;
   const r = resolveSourceDir(db, sourceId);
   if (r.dir) return r.dir;
+  return null;
+}
+
+// Per-source file index: ONE readdir sweep of the conversation folder + its media subdirs,
+// cached. Turns every per-file existence check into an in-memory lookup — thousands of
+// existsSync calls per browse request were blocking Node's single thread, which stalled
+// EVERY other page's requests (10-15s sidebar navigation while media loaded).
+const fileIndexCache = new Map<string, { at: number; files: Map<string, string> }>();
+const MEDIA_SUBDIRS = ["photos", "videos", "audio", "gifs", "stickers", "stickers_used", "files"];
+export function sourceFileIndex(dir: string, sourceId: string): Map<string, string> {
+  const hit = fileIndexCache.get(sourceId);
+  if (hit && Date.now() - hit.at < FAIL_TTL_MS) return hit.files;
+  const files = new Map<string, string>(); // lowercased filename -> absolute path
+  for (const sub of ["", ...MEDIA_SUBDIRS]) {
+    const d = sub ? path.join(dir, sub) : dir;
+    try {
+      for (const f of fs.readdirSync(d)) {
+        const k = f.toLowerCase();
+        if (!files.has(k)) files.set(k, path.join(d, f));
+      }
+    } catch { /* subdir absent */ }
+  }
+  fileIndexCache.set(sourceId, { at: Date.now(), files });
+  return files;
+}
+
+// Definitive dir for a source: cheap first, then the deep hunt AT MOST ONCE (cached both
+// ways). Browse uses this so missing/present is decided up-front and NEVER changes between
+// page requests — an unstable pool shifted page boundaries and made the grid reshuffle
+// under the user mid-scroll.
+export function ensureSourceDir(db: any, sourceId: string): string | null {
+  const cheap = cachedSourceDir(db, sourceId);
+  if (cheap) return cheap;
+  const failedAt = failCache.get(sourceId);
+  if (failedAt && Date.now() - failedAt < FAIL_TTL_MS) return null;
+  const deep = resolveSourceDir(db, sourceId, true, true);
+  if (deep.dir) { dirCache.set(sourceId, deep.dir); return deep.dir; }
+  failCache.set(sourceId, Date.now());
   return null;
 }
