@@ -5,6 +5,7 @@ import {
   insertConversation,
   insertParticipant,
   insertMessages,
+  detectAndApplyOwner,
 } from "@/lib/db/queries";
 import { v4 as uuidv4 } from "uuid";
 import crypto from "crypto";
@@ -139,6 +140,12 @@ export async function POST(request: NextRequest) {
       messagesImported += dbMessages.length;
     }
 
+    // Auto-detect the archive owner across this import's conversations and put their
+    // messages on the right (the parse-time ownerName default can't know whose archive
+    // this is — e.g. importing someone else's export while ownerName is still "Jeremy
+    // White").
+    const detectedOwner = conversationsImported > 0 ? await detectAndApplyOwner([sourceId]) : null;
+
     return NextResponse.json({
       success: true,
       stats: {
@@ -146,6 +153,7 @@ export async function POST(request: NextRequest) {
         conversationsImported,
         messagesImported,
       },
+      detectedOwner,
       errors: result.errors,
     });
   } catch (e: any) {

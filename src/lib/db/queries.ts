@@ -526,3 +526,65 @@ export async function deleteCaseSection(sectionId: string) {
   }
   scheduleSave();
 }
+
+// Auto-detect the OWNER of an import (archive) and put their messages on the right
+// (is_incoming=0). The owner is the participant present in a clear majority of the
+// import's conversations — the account holder appears in (nearly) every thread, everyone
+// else in just theirs. Facebook exports carry no per-message "this is me" flag, so this
+// cross-conversation heuristic is the reliable signal. Returns the owner name, or null
+// if no clear owner (e.g. a single conversation, or a mixed/ambiguous set) — in which
+// case the parse-time ownerName sides are left untouched.
+export async function detectAndApplyOwner(sourceIds: string[]): Promise<string | null> {
+  const db = await getDb();
+  if (!sourceIds || sourceIds.length === 0) return null;
+  const inC = sourceIds.map((id) => `'${String(id).replace(/'/g, "''")}'`).join(",");
+
+  const convCount = (db.exec(`SELECT COUNT(*) FROM conversations WHERE source_id IN (${inC})`)[0]?.values[0]?.[0] as number) || 0;
+  if (convCount < 2) return null; // can't tell owner from a single conversation
+
+  const res = db.exec(
+    `SELECT p.display_name, COUNT(DISTINCT c.id) cnt
+     FROM conversations c
+     JOIN conversation_participants cp ON cp.conversation_id = c.id
+     JOIN participants p ON p.id = cp.participant_id
+     WHERE c.source_id IN (${inC})
+     GROUP BY p.display_name
+     ORDER BY cnt DESC`
+  );
+  const rows = res[0]?.values || [];
+  if (rows.length === 0) return null;
+  const owner = rows[0][0] as string;
+  const topCnt = rows[0][1] as number;
+  const secondCnt = (rows[1]?.[1] as number) || 0;
+  // Must dominate: strictly ahead of #2 AND in at least half the conversations.
+  if (!owner || topCnt <= secondCnt || topCnt < convCount * 0.5) return null;
+
+  const safe = owner.replace(/'/g, "''");
+  db.run(
+    `UPDATE messages SET is_incoming = CASE
+       WHEN (SELECT display_name FROM participants WHERE id = messages.sender_id) = '${safe}' THEN 0 ELSE 1 END
+     WHERE source_id IN (${inC})`
+  );
+  // Flag the owner's participant rows for this import (used elsewhere, e.g. avatars).
+  db.run(
+    `UPDATE participants SET is_owner = CASE WHEN display_name = '${safe}' THEN 1 ELSE 0 END
+     WHERE id IN (SELECT cp.participant_id FROM conversation_participants cp
+                  JOIN conversations c ON c.id = cp.conversation_id WHERE c.source_id IN (${inC}))`
+  );
+  scheduleSave();
+  return owner;
+}
+
+// All source ids grouped by import batch (imported_at to the minute), most recent first.
+export async function getImportBatches(): Promise<string[][]> {
+  const db = await getDb();
+  const res = db.exec(`SELECT id, substr(imported_at,1,16) b FROM sources ORDER BY imported_at DESC`);
+  const rows = res[0]?.values || [];
+  const byBatch = new Map<string, string[]>();
+  for (const r of rows) {
+    const id = r[0] as string; const b = (r[1] as string) || "";
+    if (!byBatch.has(b)) byBatch.set(b, []);
+    byBatch.get(b)!.push(id);
+  }
+  return [...byBatch.values()];
+}

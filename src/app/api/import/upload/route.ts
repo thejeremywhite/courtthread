@@ -11,6 +11,7 @@ import {
   insertParticipant,
   insertMessages,
   deleteSource,
+  detectAndApplyOwner,
 } from "@/lib/db/queries";
 import { getDb, scheduleSave } from "@/lib/db";
 import { v4 as uuidv4 } from "uuid";
@@ -119,6 +120,7 @@ export async function POST(request: NextRequest) {
     let skippedEmpty = 0;
     const emptyFiles: string[] = [];
     const errors: Array<{ file: string; error: string }> = [];
+    const importedSourceIds: string[] = []; // this batch — for owner auto-detection
 
     const fbJsonGroups = new Map<string, Array<{ name: string; content: string }>>();
     const fbHtmlGroups = new Map<string, Array<{ name: string; content: string }>>();
@@ -218,6 +220,8 @@ export async function POST(request: NextRequest) {
           await deleteSource(sourceId);
           skippedEmpty++;
           emptyFiles.push(file.name);
+        } else {
+          importedSourceIds.push(sourceId);
         }
 
         filesProcessed++;
@@ -253,6 +257,7 @@ export async function POST(request: NextRequest) {
           const result = await importConversation(combined, sourceId, ownerName);
           conversationsImported += result.conversations;
           messagesImported += result.messages;
+          importedSourceIds.push(sourceId);
         } else {
           await deleteSource(sourceId);
           skippedEmpty++;
@@ -293,6 +298,7 @@ export async function POST(request: NextRequest) {
           const result = await importConversation(combined, sourceId, ownerName);
           conversationsImported += result.conversations;
           messagesImported += result.messages;
+          importedSourceIds.push(sourceId);
         } else {
           await deleteSource(sourceId);
           skippedEmpty++;
@@ -305,9 +311,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Auto-detect the archive owner across this whole import and put their messages on
+    // the right (the parse-time ownerName default can't know whose archive this is).
+    const detectedOwner = await detectAndApplyOwner(importedSourceIds);
+
     return NextResponse.json({
       success: true,
       stats: { filesProcessed, conversationsImported, messagesImported, skippedEmpty },
+      detectedOwner,
       emptyFiles,
       errors,
     });
