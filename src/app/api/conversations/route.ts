@@ -12,6 +12,13 @@ export async function GET(request: NextRequest) {
     const dateFrom = request.nextUrl.searchParams.get("dateFrom") || "";
     const dateTo = request.nextUrl.searchParams.get("dateTo") || "";
     const limit = parseInt(request.nextUrl.searchParams.get("limit") || "30");
+    // Both resolved CLIENT-SIDE to conversation ids (from a picked person's .conversations),
+    // not participant ids — a display name like "Facebook user" is a separate DB row per
+    // import, so a single-id lookup here would miss all but one of them.
+    const conversationIds = (request.nextUrl.searchParams.get("conversationIds") || "")
+      .split(",").filter(Boolean);
+    const excludeConversationIds = (request.nextUrl.searchParams.get("excludeConversationIds") || "")
+      .split(",").filter(Boolean);
 
     let where = "WHERE 1=1";
     if (q.length >= 2) {
@@ -23,6 +30,14 @@ export async function GET(request: NextRequest) {
     }
     if (sourceId) {
       where += ` AND c.source_id = '${sourceId.replace(/'/g, "''")}'`;
+    }
+    if (conversationIds.length > 0) {
+      const safe = conversationIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+      where += ` AND c.id IN (${safe})`;
+    }
+    if (excludeConversationIds.length > 0) {
+      const safe = excludeConversationIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+      where += ` AND c.id NOT IN (${safe})`;
     }
     if (dateFrom) {
       where += ` AND c.last_message_at >= '${dateFrom.replace(/'/g, "''")}'`;

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { ImportPicker } from "@/components/ImportPicker";
+import { PersonSearch, PersonChip, type PersonSuggestion } from "@/components/PersonSearch";
 
 interface ConversationRow {
   id: string;
@@ -43,6 +44,11 @@ export default function ConversationsPage() {
   const [platformFilter, setPlatformFilter] = useState("");
   const [sourceFilter, setSourceFilter] = useState("");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+  // Include: only show conversations any of these people are part of. Exclude: exempt
+  // whole conversations any of these people are part of (e.g. the "Facebook user"
+  // placeholder or numeric-only unresolved names).
+  const [includedParticipants, setIncludedParticipants] = useState<PersonSuggestion[]>([]);
+  const [excludedParticipants, setExcludedParticipants] = useState<PersonSuggestion[]>([]);
 
   useEffect(() => {
     try { const v = localStorage.getItem("courtthread_convlist_sort") as "newest" | "oldest"; if (v) setSortOrder(v); } catch {}
@@ -66,6 +72,14 @@ export default function ConversationsPage() {
       params.set("sort", sortOrder);
       if (dateFrom) params.set("dateFrom", dateFrom);
       if (dateTo) params.set("dateTo", dateTo);
+      // Resolve each included/excluded PERSON to conversation ids (not participant ids) —
+      // one display name like "Facebook user" is a separate DB row per import.
+      const includeIds = new Set<string>();
+      for (const p of includedParticipants) for (const c of p.conversations) includeIds.add(c.id);
+      if (includeIds.size > 0) params.set("conversationIds", Array.from(includeIds).join(","));
+      const excludeIds = new Set<string>();
+      for (const p of excludedParticipants) for (const c of p.conversations) excludeIds.add(c.id);
+      if (excludeIds.size > 0) params.set("excludeConversationIds", Array.from(excludeIds).join(","));
 
       const res = await fetch(`/api/conversations?${params}`);
       const data = await res.json();
@@ -78,7 +92,7 @@ export default function ConversationsPage() {
     } catch { /* ignore */ }
     setLoading(false);
     setInitialLoad(false);
-  }, [searchQuery, platformFilter, sourceFilter, sortOrder, dateFrom, dateTo]);
+  }, [searchQuery, platformFilter, sourceFilter, sortOrder, dateFrom, dateTo, includedParticipants, excludedParticipants]);
 
   useEffect(() => {
     fetch("/api/sources").then(r => r.json()).then(d => setSources(d.sources || [])).catch(() => {});
@@ -103,6 +117,21 @@ export default function ConversationsPage() {
 
   function handleSearchChange(value: string) {
     setSearchQuery(value);
+  }
+
+  function addIncludedPerson(p: PersonSuggestion) {
+    setIncludedParticipants((prev) => prev.some((x) => x.id === p.id) ? prev : [...prev, p]);
+    setExcludedParticipants((prev) => prev.filter((x) => x.id !== p.id));
+  }
+  function removeIncludedPerson(id: string) {
+    setIncludedParticipants((prev) => prev.filter((x) => x.id !== id));
+  }
+  function addExcludedPerson(p: PersonSuggestion) {
+    setExcludedParticipants((prev) => prev.some((x) => x.id === p.id) ? prev : [...prev, p]);
+    setIncludedParticipants((prev) => prev.filter((x) => x.id !== p.id));
+  }
+  function removeExcludedPerson(id: string) {
+    setExcludedParticipants((prev) => prev.filter((x) => x.id !== id));
   }
 
   async function handleDeleteConversation(convId: string, label: string) {
@@ -144,6 +173,20 @@ export default function ConversationsPage() {
           multi={false}
           placeholder="All sources"
         />
+        <PersonSearch
+          placeholder="Search person..."
+          sourceId={sourceFilter || undefined}
+          excludeIds={new Set(excludedParticipants.map((p) => p.id))}
+          onSelect={addIncludedPerson}
+          className="w-44"
+        />
+        <PersonSearch
+          placeholder="Exclude person..."
+          sourceId={sourceFilter || undefined}
+          excludeIds={new Set(includedParticipants.map((p) => p.id))}
+          onSelect={addExcludedPerson}
+          className="w-44"
+        />
         <select value={sortOrder} onChange={(e) => { const v = e.target.value as "newest" | "oldest"; setSortOrder(v); try { localStorage.setItem("courtthread_convlist_sort", v); } catch {} }}
           className="px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm">
           <option value="newest">Newest first</option>
@@ -160,6 +203,17 @@ export default function ConversationsPage() {
           {dateFrom || dateTo ? "Date filtered" : "Date range"}
         </button>
       </div>
+
+      {(includedParticipants.length > 0 || excludedParticipants.length > 0) && (
+        <div className="flex flex-wrap gap-1.5 mb-4">
+          {includedParticipants.map((p) => (
+            <PersonChip key={p.id} person={p} onRemove={() => removeIncludedPerson(p.id)} />
+          ))}
+          {excludedParticipants.map((p) => (
+            <PersonChip key={p.id} person={p} tone="destructive" onRemove={() => removeExcludedPerson(p.id)} />
+          ))}
+        </div>
+      )}
 
       {showDateFilter && (
         <div className="flex flex-wrap gap-3 items-end mb-4 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3">
@@ -185,6 +239,7 @@ export default function ConversationsPage() {
       ) : conversations.length === 0 ? (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-8 text-center text-[var(--muted-foreground)]">
           {searchQuery || platformFilter || sourceFilter || dateFrom || dateTo
+            || includedParticipants.length > 0 || excludedParticipants.length > 0
             ? "No conversations match your filters."
             : <>No conversations imported yet. Go to <a href="/import" className="text-[var(--primary)] underline">Import</a> to get started.</>}
         </div>
