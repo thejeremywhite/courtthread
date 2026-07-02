@@ -18,13 +18,15 @@ import crypto from "crypto";
 import path from "path";
 import fs from "fs";
 
-// CT_MEDIA_DIRS (semicolon-separated) comes first — the portable launcher points it at
-// the "media" folder beside itself, so media auto-links on ANY machine — followed by the
-// legacy dev-machine defaults.
+// Folders that hold message exports. CT_MEDIA_DIRS (semicolon-separated) first, then the
+// known local locations. The media route uses the same list plus a drive-wide fallback.
 function searchDirs(): string[] {
   const dirs = (process.env.CT_MEDIA_DIRS || "")
     .split(";").map((s) => s.trim()).filter(Boolean);
   dirs.push(
+    "D:\\Storage Drive I Backup",
+    "D:\\Storage Drive I Backup\\Trish FB",
+    "D:\\Storage Drive I Backup\\Jeremy FB Messages",
     "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
     "D:\\tmp\\fb_zips",
   );
@@ -58,29 +60,6 @@ async function setLocalMediaPath(sourceId: string, localPath: string) {
   scheduleSave();
 }
 
-function findFoldersRecursive(root: string, folderName: string, maxDepth: number, results: string[] = []): string[] {
-  if (maxDepth <= 0) return results;
-  try {
-    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return results;
-    const entries = fs.readdirSync(root);
-    for (const entry of entries) {
-      if (entry === folderName) {
-        const full = path.join(root, entry);
-        try { if (fs.statSync(full).isDirectory()) results.push(full); } catch {}
-      }
-    }
-    for (const entry of entries) {
-      try {
-        const full = path.join(root, entry);
-        if (!fs.statSync(full).isDirectory()) continue;
-        if (entry.startsWith('.')) continue;
-        findFoldersRecursive(full, folderName, maxDepth - 1, results);
-      } catch { /* skip */ }
-    }
-  } catch { /* skip */ }
-  return results;
-}
-
 async function autoLinkMediaPath(sourceId: string, uploadPath: string, mediaFilenames?: string[]) {
   const rawPath = uploadPath.replace("upload://", "");
   const folderName = rawPath.split(/[/\\]/).filter(Boolean).pop() || "";
@@ -105,9 +84,12 @@ async function autoLinkMediaPath(sourceId: string, uploadPath: string, mediaFile
     return false;
   }
 
-  // Exact relative-path match first: the browser folder picker preserves the export's
-  // internal structure, so if the export folder sits inside a search dir,
-  // <searchDir>\<rawPath> IS this conversation's own folder.
+  // ONLY the instant exact-path check here — <searchDir>\<rawPath> is this conversation's
+  // own folder because the folder picker preserves the export's internal structure. Any
+  // deeper hunt (recursive folder scan, drive search) is deferred to the media route's
+  // lazy per-view resolver: doing it here meant an 8-deep crawl PER conversation, which
+  // stalled large imports (hundreds of conversations x a big search tree).
+  void folderName; void mediaFilenames; void hasMediaInDir;
   for (const sd of searchDirs()) {
     try {
       const direct = path.join(sd, rawPath);
@@ -116,40 +98,6 @@ async function autoLinkMediaPath(sourceId: string, uploadPath: string, mediaFile
         return;
       }
     } catch { /* skip */ }
-  }
-
-  if (folderName && folderName !== "." && !folderName.includes(".")) {
-    for (const sd of searchDirs()) {
-      const candidates = findFoldersRecursive(sd, folderName, 8);
-      for (const found of candidates) {
-        if (hasMediaInDir(found)) {
-          await setLocalMediaPath(sourceId, found);
-          return;
-        }
-      }
-    }
-  }
-
-  if (mediaFilenames && mediaFilenames.length > 0) {
-    const sampleFile = mediaFilenames[0];
-    for (const sd of searchDirs()) {
-      try {
-        if (!fs.existsSync(sd)) continue;
-        const entries = fs.readdirSync(sd);
-        for (const entry of entries) {
-          const entryPath = path.join(sd, entry);
-          try {
-            if (!fs.statSync(entryPath).isDirectory()) continue;
-            for (const sub of mediaDirs) {
-              if (fs.existsSync(path.join(entryPath, sub, sampleFile))) {
-                await setLocalMediaPath(sourceId, entryPath);
-                return;
-              }
-            }
-          } catch { /* skip */ }
-        }
-      } catch { /* skip */ }
-    }
   }
 }
 

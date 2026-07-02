@@ -35,18 +35,75 @@ function findFolderRecursive(root: string, folderName: string, maxDepth: number)
 }
 
 // Where to hunt for media folders that browser (upload://) imports can't locate on their
-// own. CT_MEDIA_DIRS (semicolon-separated) comes FIRST — the portable launcher points it
-// at the "media" folder beside itself, so exports dropped there are found on ANY machine —
-// followed by the legacy dev-machine defaults.
+// own. CT_MEDIA_DIRS (semicolon-separated, optional) is checked first, then legacy defaults.
+// This is just a fast-path list; findExportRoot() below is the general, machine-independent
+// resolver.
+// Known folders that hold message exports on this machine — checked before any wider
+// drive scan so resolution is instant. (On another PC these simply don't exist and
+// findExportRoot's drive walk takes over.)
+const KNOWN_EXPORT_DIRS = [
+  "D:\\Storage Drive I Backup",
+  "D:\\Storage Drive I Backup\\Trish FB",
+  "D:\\Storage Drive I Backup\\Jeremy FB Messages",
+  "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
+  "D:\\tmp\\fb_zips",
+];
+
 function mediaSearchDirs(): string[] {
   const dirs = (process.env.CT_MEDIA_DIRS || "")
     .split(";").map((s) => s.trim()).filter(Boolean);
-  dirs.push(
-    "H:\\OneDrive\\_Waylon Court\\_Supreme Court - Case Conference\\Messaging_Emails_Texts",
-    "D:\\tmp\\fb_zips",
-    "D:\\Storage Drive I Backup\\facebook-patriciamann-2024-06-08\\Messages",
-  );
+  dirs.push(...KNOWN_EXPORT_DIRS);
   return dirs;
+}
+
+// System/huge folders never worth descending into when hunting for an export.
+const SKIP_DIRS = new Set([
+  "windows", "program files", "program files (x86)", "programdata", "$recycle.bin",
+  "system volume information", "node_modules", "appdata", "recovery", "perflogs",
+  "$windows.~ws", "$windows.~bt", "msocache", "windows.old",
+]);
+
+// Bounded folder search: find a directory named `name` within `maxDepth` of `root`,
+// skipping system/hidden dirs. Direct children first (cheap common case).
+function findFolderBounded(root: string, name: string, maxDepth: number): string | null {
+  let entries: string[];
+  try { if (!fs.statSync(root).isDirectory()) return null; entries = fs.readdirSync(root); } catch { return null; }
+  for (const e of entries) {
+    if (e === name) { try { if (fs.statSync(path.join(root, e)).isDirectory()) return path.join(root, e); } catch {} }
+  }
+  if (maxDepth <= 0) return null;
+  for (const e of entries) {
+    if (e.startsWith(".") || e.startsWith("$") || SKIP_DIRS.has(e.toLowerCase())) continue;
+    const full = path.join(root, e);
+    try { if (!fs.statSync(full).isDirectory()) continue; } catch { continue; }
+    const found = findFolderBounded(full, name, maxDepth - 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+// Locate an export's ROOT folder (e.g. "facebook-patriciamann-2024-06-08") on local
+// storage — any fixed drive or common user folder — WITHOUT hardcoded paths. The caller
+// then appends the rest of the relative path to reach the conversation's own folder, where
+// the media sits beside the message json. Machine-independent; result gets persisted so
+// this scan runs at most once per source.
+function findExportRoot(rootName: string): string | null {
+  if (!rootName || rootName === "." || rootName.includes(".")) return null;
+  const parents: string[] = (process.env.CT_MEDIA_DIRS || "").split(";").map((s) => s.trim()).filter(Boolean);
+  parents.push(...KNOWN_EXPORT_DIRS); // known export folders first — instant on this machine
+  const up = process.env.USERPROFILE;
+  if (up) parents.push(path.join(up, "Desktop"), path.join(up, "Downloads"), path.join(up, "Documents"), up);
+  for (let c = 67; c <= 90; c++) { // fixed drive roots C:..Z:
+    const d = String.fromCharCode(c) + ":\\";
+    try { if (fs.existsSync(d)) parents.push(d); } catch {}
+  }
+  const seen = new Set<string>();
+  for (const p of parents) {
+    if (seen.has(p)) continue; seen.add(p);
+    const found = findFolderBounded(p, rootName, 4);
+    if (found) return found;
+  }
+  return null;
 }
 
 function resolveSourceDir(db: any, sourceId: string, ignorePersisted = false): { dir: string | null; debug?: string; needsPersist?: boolean } {
@@ -108,6 +165,21 @@ function resolveSourceDir(db: any, sourceId: string, ignorePersisted = false): {
       } catch {}
     }
 
+    // General machine-independent resolve: find the export ROOT anywhere on local storage,
+    // then the conversation folder = <exportRoot>\<rest-of-relative-path> (media beside the
+    // json). This is what makes an export in ANY location (Trish's D:\Storage Drive I
+    // Backup\..., a copy on another PC, etc.) resolve without hardcoded paths.
+    if (firstSeg && !firstSeg.includes(".")) {
+      const exportRoot = findExportRoot(firstSeg);
+      if (exportRoot) {
+        const rest = segments.slice(1);
+        const convDir = rest.length ? path.join(exportRoot, ...rest) : exportRoot;
+        try {
+          if (fs.existsSync(convDir) && fs.statSync(convDir).isDirectory()) return { dir: convDir, needsPersist: true };
+        } catch {}
+      }
+    }
+
     // Then hunt by folder NAME — the deepest segment (the conversation's own folder)
     // first, then the top segment (single-folder uploads like "jessicaarsenault_101...").
     const names = [...new Set([lastSeg, firstSeg])].filter((n) => n && n !== "." && !n.includes("."));
@@ -129,13 +201,9 @@ function resolveSourceDir(db: any, sourceId: string, ignorePersisted = false): {
           if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return { dir: candidate, needsPersist: true };
         } catch {}
       }
-      for (const sd of searchDirs) {
-        const found = findFolderRecursive(sd, folderName, 8);
-        if (found) return { dir: found, needsPersist: true };
-      }
     }
 
-    return { dir: null, debug: `upload source (${sourcePath}), could not auto-detect local folder "${lastSeg || firstSeg}". Put the export folder in the app's "media" folder, or use "Link Media" on the Import page.` };
+    return { dir: null, debug: `upload source (${sourcePath}), could not locate the export "${firstSeg}" on local storage. Keep the exported message folder on a local drive, or use "Link Media" on the Import page.` };
   }
 
   try {
