@@ -9,6 +9,7 @@ export async function POST(request: NextRequest) {
       matchCase = false,
       conversationIds,
       participantIds,
+      excludeParticipantIds,
       senderNames,
       sourceIds,
       platforms,
@@ -66,6 +67,15 @@ export async function POST(request: NextRequest) {
     if (participantIds && participantIds.length > 0) {
       const safe = participantIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
       where += ` AND m.conversation_id IN (
+        SELECT conversation_id FROM conversation_participants WHERE participant_id IN (${safe})
+      )`;
+    }
+    // Exempt whole conversations that any of these participants are part of — e.g. filtering
+    // out the "Facebook user" placeholder or numeric-only (unresolved) names that clutter
+    // results, without hand-picking every conversation they happen to appear in.
+    if (excludeParticipantIds && excludeParticipantIds.length > 0) {
+      const safe = excludeParticipantIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
+      where += ` AND m.conversation_id NOT IN (
         SELECT conversation_id FROM conversation_participants WHERE participant_id IN (${safe})
       )`;
     }

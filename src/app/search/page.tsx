@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { PatternBuilder } from "@/components/search/PatternBuilder";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { MessageThread, ThreadViewport, ViewModeToggle, useViewMode, useThemeMode, getThemeVars } from "@/app/conversations/[id]/MessageThread";
 import { cleanSourceName } from "@/lib/sourceName";
 import { ImportPicker } from "@/components/ImportPicker";
+import { PersonSearch, type PersonSuggestion } from "@/components/PersonSearch";
 
 interface SearchResult {
   id: string;
@@ -59,7 +60,7 @@ interface ConversationRow {
 }
 
 interface ScopeChip {
-  type: "source" | "participant" | "platform" | "conversation" | "sender";
+  type: "source" | "participant" | "exclude-participant" | "platform" | "conversation" | "sender";
   id: string;
   label: string;
   detail?: string;
@@ -235,6 +236,11 @@ function ExportDropdown({ onAction, disabled, label, light }: {
   );
 }
 
+// localStorage (not sessionStorage): filters should survive closing the tab, only
+// resetting when the user explicitly clears them — "until the server is basically
+// closed and restarted" per Jeremy.
+const SEARCH_PREFS_KEY = "courtthread_search_prefs";
+
 function SearchPageInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -257,8 +263,10 @@ function SearchPageInner() {
   }, [highlightMatches]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [contextLines, setContextLines] = useState(3);
-  const [contextMode, setContextMode] = useState<ContextMode>("time");
+  // Default context: by messages, +-5, both directions — matches how Jeremy actually
+  // reads a thread (a fixed number of surrounding messages, not a time window).
+  const [contextLines, setContextLines] = useState(5);
+  const [contextMode, setContextMode] = useState<ContextMode>("messages");
   const [contextDirection, setContextDirection] = useState<ContextDirection>("both");
   const [contextCustom, setContextCustom] = useState(false);
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
@@ -290,24 +298,24 @@ function SearchPageInner() {
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
   const [selectedParticipants, setSelectedParticipants] = useState<ParticipantRow[]>([]);
+  // Exempts whole conversations these people are part of (e.g. the "Facebook user"
+  // placeholder or numeric-only unresolved names) from the search entirely.
+  const [excludedParticipants, setExcludedParticipants] = useState<ParticipantRow[]>([]);
   const [selectedConversations, setSelectedConversations] = useState<Set<string>>(new Set());
   const [senderOptions, setSenderOptions] = useState<string[]>([]);
   const [selectedSenders, setSelectedSenders] = useState<Set<string>>(new Set());
 
   // Dropdowns
-  const [convDropdownOpen, setConvDropdownOpen] = useState(false);
   const [senderDropdownOpen, setSenderDropdownOpen] = useState(false);
-  const [convSearchText, setConvSearchText] = useState("");
   const [availableConversations, setAvailableConversations] = useState<ConversationRow[]>([]);
-  const [participantQuery, setParticipantQuery] = useState("");
-  const [participantSuggestions, setParticipantSuggestions] = useState<ParticipantRow[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
-  const suggestRef = useRef<HTMLDivElement>(null);
-  const convDropRef = useRef<HTMLDivElement>(null);
   const senderDropRef = useRef<HTMLDivElement>(null);
 
   const [allPlatforms, setAllPlatforms] = useState<string[]>([]);
   const restoredRef = useRef(false);
+  // Gates the auto-save effect below: don't write anything back to storage until this
+  // mount-time restore has actually populated state, or the empty initial defaults would
+  // clobber the saved prefs before they're even applied.
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
 
   const cameFromConversationRef = useRef(false);
   const clearedRef = useRef(false);
@@ -320,7 +328,7 @@ function SearchPageInner() {
       // Fresh scoped search — discard any stale saved filters
       cameFromConversationRef.current = true;
       restoredRef.current = true; // prevent default "select all sources" from clobbering
-      try { sessionStorage.removeItem('courtthread_search'); } catch {}
+      try { localStorage.removeItem(SEARCH_PREFS_KEY); } catch {}
       setSelectedConversations(new Set([convId]));
       fetch(`/api/conversations/${convId}`).then(r => r.json()).then(d => {
         if (d.source_id) setSelectedSources(new Set([d.source_id]));
@@ -336,11 +344,13 @@ function SearchPageInner() {
           }];
         });
       }).catch(() => {});
+      setPrefsLoaded(true);
       return;
     }
-    // No conversation param — restore saved session
+    // No conversation param — restore saved session (localStorage: survives closing the
+    // tab, only cleared explicitly via "Clear all filters" or the server restarting).
     try {
-      const saved = sessionStorage.getItem('courtthread_search');
+      const saved = localStorage.getItem(SEARCH_PREFS_KEY);
       if (saved) {
         const s = JSON.parse(saved);
         if (s.query) setQuery(s.query);
@@ -357,6 +367,8 @@ function SearchPageInner() {
         if (s.senderOptions) setSenderOptions(s.senderOptions);
         if (s.selectedConversations) setSelectedConversations(new Set(s.selectedConversations));
         if (s.selectedPlatforms) setSelectedPlatforms(new Set(s.selectedPlatforms));
+        if (s.selectedParticipants) setSelectedParticipants(s.selectedParticipants);
+        if (s.excludedParticipants) setExcludedParticipants(s.excludedParticipants);
         if (s.results) setResults(s.results);
         if (s.total !== undefined) setTotal(s.total);
         if (s.page) setPage(s.page);
@@ -365,7 +377,34 @@ function SearchPageInner() {
         restoredRef.current = true;
       }
     } catch {}
+    setPrefsLoaded(true);
   }, []);
+
+  // Single auto-save: fires on ANY tracked filter/result change (not just after a
+  // completed search), so toggling a button, picking a person, or narrowing scope is
+  // remembered even if the user navigates away before hitting Search again.
+  useEffect(() => {
+    if (!prefsLoaded) return;
+    try {
+      localStorage.setItem(SEARCH_PREFS_KEY, JSON.stringify({
+        query, searchMode, matchCase, dateFrom, dateTo,
+        contextLines, contextMode, contextDirection, sortOrder,
+        selectedSources: Array.from(selectedSources),
+        selectedSenders: Array.from(selectedSenders),
+        senderOptions,
+        selectedConversations: Array.from(selectedConversations),
+        selectedPlatforms: Array.from(selectedPlatforms),
+        selectedParticipants,
+        excludedParticipants,
+        results, total, page, hasMoreResults,
+        expandedResults: Array.from(expandedResults),
+      }));
+    } catch { /* storage full or unavailable — non-fatal */ }
+  }, [prefsLoaded, query, searchMode, matchCase, dateFrom, dateTo,
+      contextLines, contextMode, contextDirection, sortOrder,
+      selectedSources, selectedSenders, senderOptions, selectedConversations,
+      selectedPlatforms, selectedParticipants, excludedParticipants,
+      results, total, page, hasMoreResults, expandedResults]);
 
   useEffect(() => {
     fetch("/api/sources").then((r) => r.json()).then((d) => {
@@ -434,46 +473,30 @@ function SearchPageInner() {
     }).catch(() => {});
   }, [selectedSources]);
 
-  const searchParticipants = useCallback(async (q: string) => {
-    if (q.length < 3) { setParticipantSuggestions([]); return; }
-    try {
-      const params = new URLSearchParams({ q });
-      if (selectedSources.size > 0) {
-        params.set("sourceId", Array.from(selectedSources)[0]);
-      }
-      const res = await fetch(`/api/participants?${params}`);
-      const data = await res.json();
-      const already = new Set(selectedParticipants.map((p) => p.display_name + (p.phone_number || "")));
-      setParticipantSuggestions(
-        (data.participants || []).filter((p: ParticipantRow) => !already.has(p.display_name + (p.phone_number || "")))
-      );
-      setShowSuggestions(true);
-    } catch { /* ignore */ }
-  }, [selectedSources, selectedParticipants]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => searchParticipants(participantQuery), 200);
-    return () => clearTimeout(timer);
-  }, [participantQuery, searchParticipants]);
-
   useEffect(() => {
     function handleClick(e: MouseEvent) {
-      if (suggestRef.current && !suggestRef.current.contains(e.target as Node)) setShowSuggestions(false);
-      if (convDropRef.current && !convDropRef.current.contains(e.target as Node)) setConvDropdownOpen(false);
       if (senderDropRef.current && !senderDropRef.current.contains(e.target as Node)) setSenderDropdownOpen(false);
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  function addParticipant(p: ParticipantRow) {
-    setSelectedParticipants((prev) => [...prev, p]);
-    setParticipantQuery("");
-    setShowSuggestions(false);
+  function addParticipant(p: PersonSuggestion) {
+    setSelectedParticipants((prev) => prev.some((x) => x.id === p.id) ? prev : [...prev, p]);
+    setExcludedParticipants((prev) => prev.filter((x) => x.id !== p.id));
   }
 
   function removeParticipant(idx: number) {
     setSelectedParticipants((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function addExcludedParticipant(p: PersonSuggestion) {
+    setExcludedParticipants((prev) => prev.some((x) => x.id === p.id) ? prev : [...prev, p]);
+    setSelectedParticipants((prev) => prev.filter((x) => x.id !== p.id));
+  }
+
+  function removeExcludedParticipant(idx: number) {
+    setExcludedParticipants((prev) => prev.filter((_, i) => i !== idx));
   }
 
   function togglePlatform(p: string) {
@@ -515,6 +538,10 @@ function SearchPageInner() {
       type: "participant" as const, id: p.id, label: p.display_name,
       detail: p.phone_number || p.platforms.join(", "),
     })),
+    ...excludedParticipants.map((p) => ({
+      type: "exclude-participant" as const, id: p.id, label: `exclude: ${p.display_name}`,
+      detail: p.phone_number || p.platforms.join(", "),
+    })),
     ...Array.from(selectedConversations).map((id) => {
       const conv = availableConversations.find((c) => c.id === id);
       return { type: "conversation" as const, id, label: conv?.title || conv?.participant_names || id, detail: conv?.platform };
@@ -529,7 +556,10 @@ function SearchPageInner() {
     else if (chip.type === "platform") togglePlatform(chip.id);
     else if (chip.type === "conversation") toggleConversation(chip.id);
     else if (chip.type === "sender") toggleSender(chip.id);
-    else {
+    else if (chip.type === "exclude-participant") {
+      const idx = excludedParticipants.findIndex((p) => p.id === chip.id);
+      if (idx >= 0) removeExcludedParticipant(idx);
+    } else {
       const idx = selectedParticipants.findIndex((p) => p.id === chip.id);
       if (idx >= 0) removeParticipant(idx);
     }
@@ -541,6 +571,7 @@ function SearchPageInner() {
     setSelectedSources(new Set());
     setSelectedPlatforms(new Set());
     setSelectedParticipants([]);
+    setExcludedParticipants([]);
     setSelectedConversations(new Set());
     setSelectedSenders(new Set());
   }
@@ -557,13 +588,13 @@ function SearchPageInner() {
     setSelectedSenders(new Set());
     setSelectedConversations(new Set());
     setSelectedParticipants([]);
+    setExcludedParticipants([]);
     setSelectedPlatforms(new Set());
     // Clear means CLEAR: deselect every import too. Nothing stays selected.
     setSelectedSources(new Set());
-    setConvSearchText("");
-    setContextMode("time");
+    setContextMode("messages");
     setContextDirection("both");
-    setContextLines(3);
+    setContextLines(5);
     setContextCustom(false);
     setSearchMode("contains");
     setMatchCase(false);
@@ -573,16 +604,9 @@ function SearchPageInner() {
     cameFromConversationRef.current = false;
     clearedRef.current = true;
     restoredRef.current = true;
-    try { sessionStorage.removeItem('courtthread_search'); } catch {}
+    try { localStorage.removeItem(SEARCH_PREFS_KEY); } catch {}
     if (searchParams.toString()) router.replace(pathname, { scroll: false });
   }
-
-  const filteredConversations = availableConversations.filter((c) => {
-    if (!convSearchText.trim()) return true;
-    const q = convSearchText.toLowerCase();
-    return (c.title || "").toLowerCase().includes(q)
-      || (c.participant_names || "").toLowerCase().includes(q);
-  });
 
   async function handleSearch(searchPage = 1, append = false) {
     const trimmed = query.trim();
@@ -665,6 +689,7 @@ function SearchPageInner() {
       }
       for (const cid of selectedConversations) convIds.add(cid);
       if (convIds.size > 0) body.conversationIds = Array.from(convIds);
+      if (excludedParticipants.length > 0) body.excludeParticipantIds = excludedParticipants.map((p) => p.id);
 
       const res = await fetch("/api/search", {
         method: "POST",
@@ -678,20 +703,8 @@ function SearchPageInner() {
       setResults(newResults);
       setTotal(data.total);
       setHasMoreResults(newHasMore);
-      try {
-        sessionStorage.setItem('courtthread_search', JSON.stringify({
-          query, searchMode, matchCase, dateFrom, dateTo,
-          contextLines, contextMode, contextDirection, sortOrder,
-          selectedSources: Array.from(selectedSources),
-          selectedSenders: Array.from(selectedSenders),
-          senderOptions,
-          selectedConversations: Array.from(selectedConversations),
-          selectedPlatforms: Array.from(selectedPlatforms),
-          results: newResults, total: data.total, page: searchPage,
-          hasMoreResults: newHasMore,
-          expandedResults: Array.from(expandedResults),
-        }));
-      } catch {}
+      // Persistence is handled by the single auto-save effect (fires whenever results/
+      // total/hasMoreResults change, right after these setters above take effect).
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -939,6 +952,7 @@ function SearchPageInner() {
       for (const p of selectedParticipants) for (const c of p.conversations) convIds.add(c.id);
       for (const cid of selectedConversations) convIds.add(cid);
       if (convIds.size > 0) body.conversationIds = Array.from(convIds);
+      if (excludedParticipants.length > 0) body.excludeParticipantIds = excludedParticipants.map((p) => p.id);
       const res = await fetch("/api/search", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1092,77 +1106,18 @@ function SearchPageInner() {
             </div>
           )}
 
-          {/* Conversation dropdown */}
-          {selectedSources.size > 0 && availableConversations.length > 0 && (
-            <div className="relative" ref={convDropRef}>
-              <button
-                onClick={() => setConvDropdownOpen(!convDropdownOpen)}
-                className={`px-3 py-1.5 rounded-lg border text-sm flex items-center gap-2 transition ${
-                  selectedConversations.size > 0
-                    ? "border-cyan-500 bg-cyan-500/10 text-cyan-300"
-                    : "border-[var(--border)] hover:border-[var(--primary)]/50"
-                }`}
-              >
-                <span>
-                  {selectedConversations.size === 0
-                    ? "All conversations"
-                    : `${selectedConversations.size} conversation${selectedConversations.size !== 1 ? "s" : ""}`}
-                </span>
-                <span className="text-[var(--muted-foreground)] text-xs">{convDropdownOpen ? "▲" : "▼"}</span>
-              </button>
-
-              {convDropdownOpen && (
-                <div className="absolute z-30 top-full left-0 mt-1 w-96 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-xl">
-                  <div className="p-2 border-b border-[var(--border)]">
-                    <input
-                      type="text"
-                      value={convSearchText}
-                      onChange={(e) => setConvSearchText(e.target.value)}
-                      placeholder="Search conversations..."
-                      className="w-full px-2.5 py-1.5 rounded border border-[var(--border)] bg-[var(--background)] text-sm"
-                      autoFocus
-                    />
-                  </div>
-                  <div className="max-h-60 overflow-y-auto">
-                    <button
-                      onClick={() => setSelectedConversations(new Set())}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition flex items-center gap-2 ${
-                        selectedConversations.size === 0 ? "text-[var(--primary)]" : ""
-                      }`}
-                    >
-                      <span className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${
-                        selectedConversations.size === 0 ? "border-[var(--primary)] bg-[var(--primary)] text-white" : "border-[var(--border)]"
-                      }`}>
-                        {selectedConversations.size === 0 && "✓"}
-                      </span>
-                      Search entire import
-                    </button>
-                    {filteredConversations.map((conv) => (
-                      <button key={conv.id} onClick={() => toggleConversation(conv.id)}
-                        className="w-full text-left px-3 py-2 text-sm hover:bg-[var(--secondary)]/50 transition flex items-center gap-2"
-                      >
-                        <span className={`w-4 h-4 shrink-0 rounded border flex items-center justify-center text-xs ${
-                          selectedConversations.has(conv.id) ? "border-cyan-500 bg-cyan-500 text-white" : "border-[var(--border)]"
-                        }`}>
-                          {selectedConversations.has(conv.id) && "✓"}
-                        </span>
-                        <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] ${PLATFORM_COLORS[conv.platform] || PLATFORM_COLORS.default}`}>
-                          {conv.platform}
-                        </span>
-                        <span className="flex-1 truncate">{conv.title || conv.participant_names || "Untitled"}</span>
-                        <span className="text-[10px] text-[var(--muted-foreground)] shrink-0">
-                          {(conv.message_count || 0).toLocaleString()}
-                        </span>
-                      </button>
-                    ))}
-                    {filteredConversations.length === 0 && convSearchText && (
-                      <p className="p-3 text-sm text-[var(--muted-foreground)]">No matching conversations</p>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Search person (include) — replaces the old "All conversations" browse dropdown.
+              Picking a person scopes search to their conversation(s); the underlying
+              selectedConversations state (e.g. from a ?conversationId= link) still works
+              and still shows as a removable chip below, it's just no longer manually
+              browsable from a dropdown here. */}
+          <PersonSearch
+            placeholder="Search person..."
+            sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
+            excludeIds={new Set(excludedParticipants.map((p) => p.id))}
+            onSelect={addParticipant}
+            className="w-52"
+          />
 
           {/* Sender (who said the word) dropdown — appears when a conversation is in scope */}
           {senderOptions.length > 0 && (
@@ -1211,39 +1166,15 @@ function SearchPageInner() {
             </div>
           )}
 
-          {/* Participant search */}
-          <div className="relative" ref={suggestRef}>
-            <input
-              type="text"
-              value={participantQuery}
-              onChange={(e) => setParticipantQuery(e.target.value)}
-              placeholder="Search person..."
-              className="w-44 px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm"
-            />
-            {showSuggestions && participantSuggestions.length > 0 && (
-              <div className="absolute z-30 top-full left-0 mt-1 w-72 rounded-lg border border-[var(--border)] bg-[var(--card)] shadow-xl max-h-60 overflow-y-auto">
-                {participantSuggestions.map((p, i) => (
-                  <button key={i} onClick={() => addParticipant(p)}
-                    className="w-full text-left px-3 py-2 hover:bg-[var(--secondary)]/50 transition flex items-center justify-between"
-                  >
-                    <div>
-                      <span className="text-sm font-medium">{p.display_name}</span>
-                      {p.phone_number && (
-                        <span className="text-xs text-[var(--muted-foreground)] ml-2">{p.phone_number}</span>
-                      )}
-                    </div>
-                    <div className="flex gap-1">
-                      {p.platforms.map((plat) => (
-                        <span key={plat} className={`text-[10px] px-1.5 py-0.5 rounded ${PLATFORM_COLORS[plat] || PLATFORM_COLORS.default}`}>
-                          {plat}
-                        </span>
-                      ))}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {/* Exclude person — exempts whole conversations this person is part of (e.g.
+              the "Facebook user" placeholder, or numeric-only unresolved names). */}
+          <PersonSearch
+            placeholder="Exclude person..."
+            sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
+            excludeIds={new Set(selectedParticipants.map((p) => p.id))}
+            onSelect={addExcludedParticipant}
+            className="w-52"
+          />
         </div>
 
         {/* Active scope chips */}
@@ -1256,6 +1187,7 @@ function SearchPageInner() {
                   chip.type === "platform" ? (PLATFORM_COLORS[chip.id] || PLATFORM_COLORS.default) :
                   chip.type === "conversation" ? "bg-cyan-500/20 text-cyan-400" :
                   chip.type === "sender" ? "bg-amber-500/20 text-amber-400" :
+                  chip.type === "exclude-participant" ? "bg-red-500/20 text-red-400" :
                   "bg-orange-500/20 text-orange-400"
                 }`}
               >
@@ -1334,11 +1266,13 @@ function SearchPageInner() {
 
           <div>
             <label className="text-[10px] text-[var(--muted-foreground)] uppercase tracking-wider mb-1 block">Sort</label>
-            <select value={sortOrder} onChange={(e) => setSortOrder(e.target.value as "asc" | "desc")}
-              className="px-2 py-1 rounded border border-[var(--border)] bg-[var(--background)] text-sm">
-              <option value="desc">Newest first</option>
-              <option value="asc">Oldest first</option>
-            </select>
+            <button
+              onClick={() => setSortOrder((prev) => (prev === "desc" ? "asc" : "desc"))}
+              className="px-3 py-1 rounded border border-[var(--border)] text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)]/50 transition"
+              title="Click to switch sort order"
+            >
+              {sortOrder === "desc" ? "Newest first" : "Oldest first"}
+            </button>
           </div>
         </div>
       </div>
