@@ -96,9 +96,63 @@ export async function POST(request: NextRequest) {
     }
 
     const order = sortOrder === "desc" ? "DESC" : "ASC";
-    // TODO (queued, last item): wildcard/filters-only browse (!hasQuery) should return
-    // conversation-level summaries instead of a flat per-message dump. Deferred to the end
-    // of the current work queue per Jeremy — see project memory / conversation notes.
+
+    // Wildcard / filters-only browse (no search TEXT): a flat per-message dump of an
+    // entire import is useless noise (Jeremy: "makes the page super long" — 164k rows for
+    // one browse; "it should bring up each conversation... that contains the specific
+    // things we filtered for"). Return one row per CONVERSATION that has at least one
+    // message matching the applied filters (date range, sender, included/excluded person),
+    // with the matched date range and count — a compact summary instead of every message.
+    if (!hasQuery) {
+      const convAgg = `
+        SELECT m.conversation_id,
+               COUNT(*) as matched_count,
+               MIN(m.timestamp) as first_matched_at,
+               MAX(m.timestamp) as last_matched_at
+        FROM messages m
+        LEFT JOIN participants p ON m.sender_id = p.id
+        ${where}
+        GROUP BY m.conversation_id
+      `;
+      const convQuery = `
+        SELECT c.id, c.title, c.platform, c.source_id,
+               GROUP_CONCAT(DISTINCT p2.display_name) as participant_names,
+               c.message_count as total_message_count,
+               agg.matched_count, agg.first_matched_at, agg.last_matched_at
+        FROM (${convAgg}) agg
+        JOIN conversations c ON c.id = agg.conversation_id
+        LEFT JOIN conversation_participants cp2 ON cp2.conversation_id = c.id
+        LEFT JOIN participants p2 ON p2.id = cp2.participant_id
+        GROUP BY c.id
+        ORDER BY agg.last_matched_at ${order}
+        LIMIT ${limit} OFFSET ${offset}
+      `;
+      const countQuery = `SELECT COUNT(*) as cnt FROM (${convAgg})`;
+
+      const toObjects = (res: any) => {
+        if (!res || !res[0]) return [];
+        const { columns, values } = res[0];
+        return values.map((row: any[]) => {
+          const obj: any = {};
+          columns.forEach((col: string, i: number) => { obj[col] = row[i]; });
+          return obj;
+        });
+      };
+
+      const conversations = toObjects(db.exec(convQuery));
+      const countResult = db.exec(countQuery);
+      const total = (countResult[0]?.values[0]?.[0] as number) || 0;
+
+      return NextResponse.json({
+        mode: "conversations",
+        conversations,
+        total,
+        page,
+        limit,
+        query,
+      });
+    }
+
     const mainQuery = `
       SELECT m.*, p.display_name as sender_name, c.title as conversation_title,
              s.file_type as source_file_type, s.metadata as source_metadata

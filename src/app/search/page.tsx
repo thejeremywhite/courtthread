@@ -42,6 +42,20 @@ interface SourceRow {
   message_count: number;
 }
 
+// A wildcard/filters-only browse (no search TEXT) returns one summary per matching
+// CONVERSATION instead of a flat per-message dump — see /api/search's !hasQuery branch.
+interface ConvSummary {
+  id: string;
+  title: string | null;
+  platform: string;
+  source_id: string;
+  participant_names: string | null;
+  total_message_count: number;
+  matched_count: number;
+  first_matched_at: string;
+  last_matched_at: string;
+}
+
 interface ParticipantRow {
   id: string;
   display_name: string;
@@ -275,6 +289,9 @@ function SearchPageInner() {
   const [showBuilder, setShowBuilder] = useState(false);
   const [searching, setSearching] = useState(false);
   const [results, setResults] = useState<SearchResult[] | null>(null);
+  // Populated instead of `results` when the search API returns conversation-level
+  // summaries (wildcard/filters-only browse) rather than per-message rows.
+  const [conversationResults, setConversationResults] = useState<ConvSummary[] | null>(null);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [error, setError] = useState<string | null>(null);
@@ -370,6 +387,7 @@ function SearchPageInner() {
         if (s.selectedParticipants) setSelectedParticipants(s.selectedParticipants);
         if (s.excludedParticipants) setExcludedParticipants(s.excludedParticipants);
         if (s.results) setResults(s.results);
+        if (s.conversationResults) setConversationResults(s.conversationResults);
         if (s.total !== undefined) setTotal(s.total);
         if (s.page) setPage(s.page);
         if (s.hasMoreResults !== undefined) setHasMoreResults(s.hasMoreResults);
@@ -396,7 +414,7 @@ function SearchPageInner() {
         selectedPlatforms: Array.from(selectedPlatforms),
         selectedParticipants,
         excludedParticipants,
-        results, total, page, hasMoreResults,
+        results, conversationResults, total, page, hasMoreResults,
         expandedResults: Array.from(expandedResults),
       }));
     } catch { /* storage full or unavailable — non-fatal */ }
@@ -404,7 +422,7 @@ function SearchPageInner() {
       contextLines, contextMode, contextDirection, sortOrder,
       selectedSources, selectedSenders, senderOptions, selectedConversations,
       selectedPlatforms, selectedParticipants, excludedParticipants,
-      results, total, page, hasMoreResults, expandedResults]);
+      results, conversationResults, total, page, hasMoreResults, expandedResults]);
 
   useEffect(() => {
     fetch("/api/sources").then((r) => r.json()).then((d) => {
@@ -579,6 +597,7 @@ function SearchPageInner() {
   function clearSearch() {
     setQuery("");
     setResults(null);
+    setConversationResults(null);
     setTotal(0);
     setPage(1);
     setError(null);
@@ -703,9 +722,16 @@ function SearchPageInner() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      const newResults = append && results ? [...results, ...data.results] : data.results;
       const newHasMore = searchPage * 50 < data.total;
-      setResults(newResults);
+      if (data.mode === "conversations") {
+        const newConvResults = append && conversationResults ? [...conversationResults, ...data.conversations] : data.conversations;
+        setConversationResults(newConvResults);
+        setResults(null);
+      } else {
+        const newResults = append && results ? [...results, ...data.results] : data.results;
+        setResults(newResults);
+        setConversationResults(null);
+      }
       setTotal(data.total);
       setHasMoreResults(newHasMore);
       // Persistence is handled by the single auto-save effect (fires whenever results/
@@ -1302,11 +1328,15 @@ function SearchPageInner() {
         </div>
       )}
 
-      {results !== null && (
+      {(results !== null || conversationResults !== null) && (
         <div>
           <div className="flex items-center justify-between mb-4">
             <p className="text-[var(--muted-foreground)]">
-              {total} result{total !== 1 ? "s" : ""}{query.trim() && (<> for{" "}
+              {total} {conversationResults !== null ? "conversation" : "result"}{total !== 1 ? "s" : ""}
+              {conversationResults !== null && (
+                <span className="text-xs ml-2">— browsing scope (no search term); pick a conversation to open it</span>
+              )}
+              {query.trim() && (<> for{" "}
               <span className="text-[var(--foreground)] font-medium">
                 {searchMode === "regex" ? `/${query}/` : `"${query}"`}
               </span></>)}
@@ -1318,7 +1348,7 @@ function SearchPageInner() {
             </p>
             <div className="flex items-center gap-3">
               <ViewModeToggle mode={viewMode} onChange={setViewMode} theme={themeMode} onThemeChange={setThemeMode} />
-              {results.length > 0 && (
+              {results && results.length > 0 && (
                 <>
                   <button onClick={() => openFormattedView()}
                     className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-xs font-medium hover:bg-[var(--secondary)] transition"
@@ -1338,8 +1368,38 @@ function SearchPageInner() {
             </div>
           </div>
 
+          {conversationResults !== null ? (
+            <div className="space-y-2">
+              {conversationResults.map((conv) => (
+                <a key={conv.id} href={`/conversations/${conv.id}`} target="_blank" rel="noopener noreferrer"
+                  className="block rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:border-[var(--primary)] transition">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className={`px-2 py-0.5 rounded text-xs ${PLATFORM_COLORS[conv.platform] || PLATFORM_COLORS.default}`}>
+                          {conv.platform}
+                        </span>
+                        <h3 className="font-semibold truncate">{conv.title || conv.participant_names || "Untitled"}</h3>
+                      </div>
+                      {conv.participant_names && (
+                        <p className="text-sm text-[var(--muted-foreground)] truncate">{conv.participant_names}</p>
+                      )}
+                    </div>
+                    <div className="text-right text-sm shrink-0">
+                      <p className="font-medium">
+                        {conv.matched_count.toLocaleString()} of {conv.total_message_count.toLocaleString()} msgs match
+                      </p>
+                      <p className="text-[var(--muted-foreground)] text-xs">
+                        {formatTime(conv.first_matched_at)} — {formatTime(conv.last_matched_at)}
+                      </p>
+                    </div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          ) : (
           <div className="space-y-3">
-            {results.map((result) => {
+            {results!.map((result) => {
               const isExpanded = expandedResults.has(result.id);
               const platformClass = PLATFORM_COLORS[result.platform] || PLATFORM_COLORS.default;
               return (
@@ -1401,11 +1461,14 @@ function SearchPageInner() {
               );
             })}
           </div>
+          )}
 
           <div ref={resultsEndRef} className="h-10 flex items-center justify-center mt-4">
             {loadingMore && <span className="text-sm text-[var(--muted-foreground)]">Loading more...</span>}
-            {!hasMoreResults && results && results.length > 0 && (
-              <span className="text-xs text-[var(--muted-foreground)]">All {total} results loaded</span>
+            {!hasMoreResults && total > 0 && (
+              <span className="text-xs text-[var(--muted-foreground)]">
+                All {total} {conversationResults !== null ? "conversations" : "results"} loaded
+              </span>
             )}
           </div>
         </div>
