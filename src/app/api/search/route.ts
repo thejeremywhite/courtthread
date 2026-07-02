@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
       matchCase = false,
       conversationIds,
       participantIds,
-      excludeParticipantIds,
+      excludeConversationIds,
       senderNames,
       sourceIds,
       platforms,
@@ -70,14 +70,15 @@ export async function POST(request: NextRequest) {
         SELECT conversation_id FROM conversation_participants WHERE participant_id IN (${safe})
       )`;
     }
-    // Exempt whole conversations that any of these participants are part of — e.g. filtering
-    // out the "Facebook user" placeholder or numeric-only (unresolved) names that clutter
-    // results, without hand-picking every conversation they happen to appear in.
-    if (excludeParticipantIds && excludeParticipantIds.length > 0) {
-      const safe = excludeParticipantIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
-      where += ` AND m.conversation_id NOT IN (
-        SELECT conversation_id FROM conversation_participants WHERE participant_id IN (${safe})
-      )`;
+    // Exempt whole conversations by id — e.g. filtering out the "Facebook user" placeholder
+    // or numeric-only (unresolved) names that clutter results. The client resolves an
+    // excluded PERSON to their conversation ids (same aggregation as include's
+    // participantIds->conversations), which correctly covers every distinct participant
+    // row sharing that display name across separate imports — a name-only lookup here
+    // would miss all but one of those rows.
+    if (excludeConversationIds && excludeConversationIds.length > 0) {
+      const safe = excludeConversationIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
+      where += ` AND m.conversation_id NOT IN (${safe})`;
     }
     if (senderNames && senderNames.length > 0) {
       const safe = senderNames.map((n: string) => `'${n.replace(/'/g, "''")}'`).join(",");
@@ -95,6 +96,9 @@ export async function POST(request: NextRequest) {
     }
 
     const order = sortOrder === "desc" ? "DESC" : "ASC";
+    // TODO (queued, last item): wildcard/filters-only browse (!hasQuery) should return
+    // conversation-level summaries instead of a flat per-message dump. Deferred to the end
+    // of the current work queue per Jeremy — see project memory / conversation notes.
     const mainQuery = `
       SELECT m.*, p.display_name as sender_name, c.title as conversation_title,
              s.file_type as source_file_type, s.metadata as source_metadata

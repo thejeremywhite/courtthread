@@ -689,7 +689,12 @@ function SearchPageInner() {
       }
       for (const cid of selectedConversations) convIds.add(cid);
       if (convIds.size > 0) body.conversationIds = Array.from(convIds);
-      if (excludedParticipants.length > 0) body.excludeParticipantIds = excludedParticipants.map((p) => p.id);
+      // Resolve each excluded PERSON to conversation ids (not participant ids): one display
+      // name like "Facebook user" can be a separate participant row per import, so a name-
+      // level or single-id lookup would miss all but one of them.
+      const excludeConvIds = new Set<string>();
+      for (const p of excludedParticipants) for (const c of p.conversations) excludeConvIds.add(c.id);
+      if (excludeConvIds.size > 0) body.excludeConversationIds = Array.from(excludeConvIds);
 
       const res = await fetch("/api/search", {
         method: "POST",
@@ -952,7 +957,9 @@ function SearchPageInner() {
       for (const p of selectedParticipants) for (const c of p.conversations) convIds.add(c.id);
       for (const cid of selectedConversations) convIds.add(cid);
       if (convIds.size > 0) body.conversationIds = Array.from(convIds);
-      if (excludedParticipants.length > 0) body.excludeParticipantIds = excludedParticipants.map((p) => p.id);
+      const excludeConvIds = new Set<string>();
+      for (const p of excludedParticipants) for (const c of p.conversations) excludeConvIds.add(c.id);
+      if (excludeConvIds.size > 0) body.excludeConversationIds = Array.from(excludeConvIds);
       const res = await fetch("/api/search", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

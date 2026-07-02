@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
       sourceIds,
       conversationIds,
       senderNames,
+      excludeConversationIds,
       platforms,
       dateFrom,
       dateTo,
@@ -58,6 +59,16 @@ export async function POST(request: NextRequest) {
     if (senderNames && senderNames.length > 0) {
       const safe = senderNames.map((n: string) => `'${n.replace(/'/g, "''")}'`).join(",");
       where += ` AND p.display_name IN (${safe})`;
+    }
+    // Exempts whole conversations by id — mirrors /api/search's excludeConversationIds (e.g.
+    // filtering out the "Facebook user" placeholder or numeric-only unresolved names, which
+    // as blocked/deleted accounts often never send anything themselves, so excluding just
+    // their OWN messages wouldn't help). The client resolves a person to conversation ids
+    // client-side (same aggregation include already uses), since one display name can span
+    // several distinct participant rows across separate imports.
+    if (excludeConversationIds && excludeConversationIds.length > 0) {
+      const safe = excludeConversationIds.map((id: string) => `'${id.replace(/'/g, "''")}'`).join(",");
+      where += ` AND m.conversation_id NOT IN (${safe})`;
     }
     if (platforms && platforms.length > 0) {
       const safe = platforms.map((p: string) => `'${p.replace(/'/g, "''")}'`).join(",");

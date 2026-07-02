@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, Suspense, memo } from "react"
 import { useSearchParams } from "next/navigation";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { ImportPicker } from "@/components/ImportPicker";
+import { PersonSearch, PersonChip, type PersonSuggestion } from "@/components/PersonSearch";
 
 interface MediaItem {
   media_id: string;
@@ -255,6 +256,9 @@ function MediaGalleryInner() {
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [selectedConversations, setSelectedConversations] = useState<Set<string>>(new Set());
   const [selectedSenders, setSelectedSenders] = useState<Set<string>>(new Set());
+  // Exempts whole conversations these people are part of (e.g. the "Facebook user"
+  // placeholder or numeric-only unresolved names) from the media grid entirely.
+  const [excludedParticipants, setExcludedParticipants] = useState<PersonSuggestion[]>([]);
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
   const [selectedMediaTypes, setSelectedMediaTypes] = useState<Set<string>>(new Set());
   const [senderOptions, setSenderOptions] = useState<string[]>([]);
@@ -263,8 +267,9 @@ function MediaGalleryInner() {
   const [dateTo, setDateTo] = useState("");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
   const [thumbSize, setThumbSize] = useState<"small" | "medium" | "large" | "xlarge">("medium");
-  const [groupByDate, setGroupByDate] = useState(true);
-  const [hideMissing, setHideMissing] = useState(false);
+  // Defaults: NOT grouped by date, missing media HIDDEN — per Jeremy's preference.
+  const [groupByDate, setGroupByDate] = useState(false);
+  const [hideMissing, setHideMissing] = useState(true);
 
   useEffect(() => {
     // Arriving from a conversation's "Media" button: start fresh, scoped to just that
@@ -294,6 +299,7 @@ function MediaGalleryInner() {
     if (saved.sources?.length) setSelectedSources(new Set(saved.sources));
     if (saved.conversations?.length) setSelectedConversations(new Set(saved.conversations));
     if (saved.senders?.length) setSelectedSenders(new Set(saved.senders));
+    if (saved.excludedParticipants?.length) setExcludedParticipants(saved.excludedParticipants);
     if (saved.platforms?.length) setSelectedPlatforms(new Set(saved.platforms));
     if (saved.mediaTypes?.length) setSelectedMediaTypes(new Set(saved.mediaTypes));
     if (saved.dateFrom) setDateFrom(saved.dateFrom);
@@ -302,6 +308,7 @@ function MediaGalleryInner() {
     if (saved.thumbSize) setThumbSize(saved.thumbSize);
     if (saved.groupByDate !== undefined) setGroupByDate(saved.groupByDate);
     if (saved.hideMissing !== undefined) setHideMissing(saved.hideMissing);
+    if (saved.convSearchText) setConvSearchText(saved.convSearchText);
     setPrefsLoaded(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -338,6 +345,7 @@ function MediaGalleryInner() {
       sources: Array.from(selectedSources),
       conversations: Array.from(selectedConversations),
       senders: Array.from(selectedSenders),
+      excludedParticipants,
       platforms: Array.from(selectedPlatforms),
       mediaTypes: Array.from(selectedMediaTypes),
       dateFrom,
@@ -346,9 +354,11 @@ function MediaGalleryInner() {
       thumbSize,
       groupByDate,
       hideMissing,
+      convSearchText,
     });
-  }, [prefsLoaded, selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
-      selectedMediaTypes, dateFrom, dateTo, sortOrder, thumbSize, groupByDate, hideMissing]);
+  }, [prefsLoaded, selectedSources, selectedConversations, selectedSenders, excludedParticipants,
+      selectedPlatforms, selectedMediaTypes, dateFrom, dateTo, sortOrder, thumbSize, groupByDate,
+      hideMissing, convSearchText]);
 
   // Lightbox keyboard nav + load-ahead is defined lower (it needs loadMedia).
 
@@ -450,6 +460,14 @@ function MediaGalleryInner() {
     if (selectedSources.size > 0) body.sourceIds = Array.from(selectedSources);
     if (selectedConversations.size > 0) body.conversationIds = Array.from(selectedConversations);
     if (selectedSenders.size > 0) body.senderNames = Array.from(selectedSenders);
+    // Resolve each excluded PERSON to conversation ids (not participant ids): one display
+    // name like "Facebook user" can be a separate participant row per import, so a name-
+    // level or single-id lookup would miss all but one of them.
+    if (excludedParticipants.length > 0) {
+      const excludeConvIds = new Set<string>();
+      for (const p of excludedParticipants) for (const c of p.conversations) excludeConvIds.add(c.id);
+      if (excludeConvIds.size > 0) body.excludeConversationIds = Array.from(excludeConvIds);
+    }
     if (selectedPlatforms.size > 0) body.platforms = Array.from(selectedPlatforms);
     if (selectedMediaTypes.size > 0) body.mediaTypes = Array.from(selectedMediaTypes);
     if (dateFrom) body.dateFrom = dateFrom;
@@ -536,8 +554,8 @@ function MediaGalleryInner() {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
-      selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
+  }, [selectedSources, selectedConversations, selectedSenders, excludedParticipants,
+      selectedPlatforms, selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
 
   // Auto-search when any filter changes (incl. Hide missing - it's server-side now)
   useEffect(() => {
@@ -547,8 +565,8 @@ function MediaGalleryInner() {
     if (!hasScope) return;
     setPage(1);
     loadMedia(1);
-  }, [selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
-      selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
+  }, [selectedSources, selectedConversations, selectedSenders, excludedParticipants,
+      selectedPlatforms, selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
 
   // HARD CAP on pages loaded without a real user scroll: a runaway chain once appended
   // the whole catalog and froze the tab under thousands of DOM nodes. Scrolling resets it.
@@ -655,6 +673,25 @@ function MediaGalleryInner() {
     });
   }
 
+  // Picking a person broadens scope to include all their conversations (mirrors Search's
+  // include-participant); excluding removes any conversation involving that person entirely.
+  function addIncludedPerson(p: PersonSuggestion) {
+    setSelectedConversations((prev) => {
+      const next = new Set(prev);
+      for (const c of p.conversations) next.add(c.id);
+      return next;
+    });
+    setExcludedParticipants((prev) => prev.filter((x) => x.id !== p.id));
+  }
+
+  function addExcludedPerson(p: PersonSuggestion) {
+    setExcludedParticipants((prev) => prev.some((x) => x.id === p.id) ? prev : [...prev, p]);
+  }
+
+  function removeExcludedPerson(id: string) {
+    setExcludedParticipants((prev) => prev.filter((x) => x.id !== id));
+  }
+
   function togglePlatform(p: string) {
     setSelectedPlatforms((prev) => {
       const next = new Set(prev);
@@ -675,6 +712,7 @@ function MediaGalleryInner() {
     setSelectedSources(new Set());
     setSelectedConversations(new Set());
     setSelectedSenders(new Set());
+    setExcludedParticipants([]);
     setSelectedPlatforms(new Set());
     setSelectedMediaTypes(new Set());
     setDateFrom("");
@@ -762,8 +800,9 @@ function MediaGalleryInner() {
           {/* Source dropdown (searchable by import name or participant) */}
           <ImportPicker sources={sources} selected={selectedSources} onChange={setSelectedSources} multi placeholder="Imports" />
 
-          {/* Conversation dropdown */}
-          {availableConversations.length > 0 && (
+          {/* Conversation dropdown — hidden once locked to exactly one conversation
+              (nothing left to pick; use "Clear all" to broaden back out). */}
+          {availableConversations.length > 0 && selectedConversations.size !== 1 && (
             <div className="relative" ref={convDropRef}>
               <button
                 onClick={() => setConvDropdownOpen(!convDropdownOpen)}
@@ -820,6 +859,26 @@ function MediaGalleryInner() {
               )}
             </div>
           )}
+
+          {/* Search person (include) — broadens scope to that person's conversations */}
+          <PersonSearch
+            placeholder="Search person..."
+            sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
+            conversationId={selectedConversations.size === 1 ? Array.from(selectedConversations)[0] : undefined}
+            excludeIds={new Set(excludedParticipants.map((p) => p.id))}
+            onSelect={addIncludedPerson}
+            className="w-44"
+          />
+
+          {/* Exclude person — exempts whole conversations this person is part of (e.g. the
+              "Facebook user" placeholder, or numeric-only unresolved names). */}
+          <PersonSearch
+            placeholder="Exclude person..."
+            sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
+            conversationId={selectedConversations.size === 1 ? Array.from(selectedConversations)[0] : undefined}
+            onSelect={addExcludedPerson}
+            className="w-44"
+          />
 
           {/* Platform dropdown */}
           {allPlatforms.length > 1 && (
@@ -900,6 +959,15 @@ function MediaGalleryInner() {
             {hideMissing ? "Hiding missing" : "Hide missing media"}
           </button>
         </div>
+
+        {/* Excluded people */}
+        {excludedParticipants.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {excludedParticipants.map((p) => (
+              <PersonChip key={p.id} person={p} tone="destructive" onRemove={() => removeExcludedPerson(p.id)} />
+            ))}
+          </div>
+        )}
 
         {/* Date range */}
         <div className="flex flex-wrap gap-3 items-end">
