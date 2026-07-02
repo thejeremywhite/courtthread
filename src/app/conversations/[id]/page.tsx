@@ -213,6 +213,15 @@ export default function ConversationPage() {
     }
   }, [messages, highlightMessageId, scrolledToHighlight]);
 
+  // Fires as the media lightbox arrows to a different message — scroll it into view so the
+  // thread keeps pace with what's being previewed, instead of requiring "Show in
+  // conversation" again. Graceful no-op if that message hasn't been loaded into the DOM yet
+  // (e.g. still further down an un-scrolled infinite-load page).
+  const scrollToMessage = useCallback((messageId: string) => {
+    const el = document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, []);
+
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
       if (entries[0].isIntersecting && hasMore && !loadingMore && nextCursor) {
@@ -410,6 +419,7 @@ export default function ConversationPage() {
           highlightRef={highlightRef}
           className="p-4"
           viewMode={viewMode}
+          onLightboxNavigate={scrollToMessage}
         />
       </ThreadViewport>
 

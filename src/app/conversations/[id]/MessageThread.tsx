@@ -438,7 +438,7 @@ function MessageBubble({
 // page"). Fetches the conversation's full media list once via /api/media/browse and
 // locates the clicked item within it; the seed itself renders immediately (no loading
 // flash) and arrows fade in once that list resolves and finds a match.
-function ThreadLightbox({ seed, onClose }: { seed: LightboxMedia; onClose: () => void }) {
+function ThreadLightbox({ seed, onClose, onNavigate }: { seed: LightboxMedia; onClose: () => void; onNavigate?: (messageId: string) => void }) {
   const [items, setItems] = useState<ThreadMediaItem[] | null>(null);
   const [idx, setIdx] = useState(-1); // -1 = not yet resolved / not found -> show seed only
   const [failed, setFailed] = useState<Set<string>>(new Set());
@@ -490,6 +490,13 @@ function ThreadLightbox({ seed, onClose }: { seed: LightboxMedia; onClose: () =>
   const displayContent = navItem?.content;
   const displayConvId = navItem ? navItem.conversation_id : seed.conversationId;
   const displayMsgId = navItem ? navItem.message_id : seed.messageId;
+
+  // Keep the underlying conversation thread scrolled to whatever the lightbox is currently
+  // showing (Jeremy: browsing left/right "should just scroll the conversation down or up"
+  // instead of needing "Show in conversation" again).
+  useEffect(() => {
+    if (displayMsgId) onNavigate?.(displayMsgId);
+  }, [displayMsgId, onNavigate]);
 
   let prevOk = false, nextOk = false;
   if (items && idx >= 0) {
@@ -571,6 +578,7 @@ export function MessageThread({
   highlightRef,
   className,
   viewMode,
+  onLightboxNavigate,
 }: {
   messages: Message[];
   platform: string;
@@ -584,6 +592,11 @@ export function MessageThread({
   highlightRef?: RefObject<HTMLDivElement | null>;
   className?: string;
   viewMode?: ViewMode;
+  // Fires as the lightbox arrows to a different message — the conversation detail page
+  // uses this to scroll the thread to keep pace, instead of requiring "Show in
+  // conversation". Left undefined on Search's compact/expanded previews, where there's no
+  // full scrollable thread behind the lightbox to scroll.
+  onLightboxNavigate?: (messageId: string) => void;
 }) {
   const [lightboxItem, setLightboxItem] = useState<LightboxMedia | null>(null);
   let lastDate = "";
@@ -598,6 +611,7 @@ export function MessageThread({
         const isHighlighted = highlightMessageId === msg.id;
         return (
           <div key={msg.id}
+            data-message-id={msg.id}
             ref={isHighlighted ? highlightRef : undefined}
             className={isHighlighted ? "ring-2 ring-amber-400 rounded-lg" : ""}>
             {showDateSep && <DateSeparator date={msg.timestamp} />}
@@ -614,7 +628,9 @@ export function MessageThread({
           </div>
         );
       })}
-      {lightboxItem && <ThreadLightbox seed={lightboxItem} onClose={() => setLightboxItem(null)} />}
+      {lightboxItem && (
+        <ThreadLightbox seed={lightboxItem} onClose={() => setLightboxItem(null)} onNavigate={onLightboxNavigate} />
+      )}
     </div>
   );
 }
