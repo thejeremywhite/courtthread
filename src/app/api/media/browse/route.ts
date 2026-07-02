@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { cachedSourceDir, findFile, subdirsForType } from "@/lib/media-resolver";
 
 interface MediaEntry {
   filename: string;
@@ -153,6 +154,23 @@ export async function POST(request: NextRequest) {
     const total = allItems.length;
     const offset = (page - 1) * limit;
     const items = allItems.slice(offset, offset + limit);
+
+    // Pre-mark files that don't exist on disk (missing:true) using cheap CACHED source-dir
+    // resolution — the client then renders them as missing WITHOUT issuing a request, so
+    // doomed 404s never clog the browser's connection pool (they made the sidebar nav hang).
+    const dirBySource = new Map<string, string | null>();
+    for (const it of items) {
+      let dir = dirBySource.get(it.source_id);
+      if (dir === undefined) {
+        try { dir = cachedSourceDir(db, it.source_id); } catch { dir = null; }
+        dirBySource.set(it.source_id, dir);
+      }
+      if (dir) {
+        it.missing = !findFile(dir, it.original_filename || "", subdirsForType(it.media_type));
+      }
+      // No dir known yet -> leave undefined: the client requests normally and the media
+      // route's once-per-source deep hunt gets its chance (then this becomes cheap).
+    }
 
     return NextResponse.json({
       items,

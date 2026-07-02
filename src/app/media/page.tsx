@@ -22,6 +22,9 @@ interface MediaItem {
   is_incoming: number;
   sender_name: string;
   conversation_title: string | null;
+  // Set by /api/media/browse: true = file confirmed absent on disk (render as missing,
+  // do NOT request it); undefined = unknown (request normally).
+  missing?: boolean;
 }
 
 interface SourceRow {
@@ -103,14 +106,23 @@ const MediaThumbnail = memo(function MediaThumbnail({
   onClickImage: (item: MediaItem) => void;
   onShowInConversation: (item: MediaItem) => void;
 }) {
-  const [failed, setFailed] = useState(false);
+  // Browse pre-marks files confirmed absent on disk: render them as missing WITHOUT ever
+  // requesting them (doomed 404s used to clog the browser's connection pool and made the
+  // sidebar nav hang while the grid loaded).
+  const [failed, setFailed] = useState(item.missing === true);
 
   const isVideo = item.media_type === "video";
   const isAudio = item.media_type === "audio";
   const isVisual = !isVideo && !isAudio;
 
   useEffect(() => {
-    if (!isVideo || failed) return;
+    if (item.missing === true) onFailed(item.media_id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // HEAD-probe videos only when browse couldn't determine existence (missing undefined).
+    if (!isVideo || failed || item.missing !== undefined) return;
     fetch(mediaUrl, { method: "HEAD" }).then(r => {
       if (!r.ok) { setFailed(true); onFailed(item.media_id); }
     }).catch(() => { setFailed(true); onFailed(item.media_id); });
@@ -545,7 +557,11 @@ function MediaGalleryInner() {
     // or hideMissing hid the new rows), no new intersection event will ever come — check
     // directly and chain the next page. loading/loadingMore/hasMore gate the recursion.
     maybeLoad();
-    return () => observer.disconnect();
+    // Belt-and-braces: intersection events can be missed while the user rests at the
+    // bottom (Jeremy: "it just sits there until I scroll up and back down"). A cheap
+    // periodic visibility re-check guarantees the next page always loads.
+    const tick = setInterval(maybeLoad, 700);
+    return () => { observer.disconnect(); clearInterval(tick); };
   }, [hasMore, loading, loadingMore, page, loadMedia]);
 
   function toggleConversation(id: string) {
