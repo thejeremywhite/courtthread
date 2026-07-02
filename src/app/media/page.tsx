@@ -529,19 +529,22 @@ function MediaGalleryInner() {
   }, [selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
       selectedMediaTypes, dateFrom, dateTo, sortOrder]);
 
-  const lastLoadTimeRef = useRef(0);
   useEffect(() => {
+    const el = observerRef.current;
+    if (!el) return;
+    const maybeLoad = () => {
+      if (!hasMore || loading || loadingMore || !hasSearchedRef.current) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.top < window.innerHeight + 400) loadMedia(page + 1, true);
+    };
     const observer = new IntersectionObserver((entries) => {
-      if (entries[0].isIntersecting && hasMore && !loading && !loadingMore && hasSearchedRef.current) {
-        // Debounce: when hideMissing hides all items, the observer fires immediately
-        // after each load. Require at least 500ms between loads to prevent a runaway loop.
-        const now = Date.now();
-        if (now - lastLoadTimeRef.current < 500) return;
-        lastLoadTimeRef.current = now;
-        loadMedia(page + 1, true);
-      }
+      if (entries[0].isIntersecting) maybeLoad();
     }, { threshold: 0.1, rootMargin: "400px" });
-    if (observerRef.current) observer.observe(observerRef.current);
+    observer.observe(el);
+    // A finished load re-runs this effect. If the sentinel is STILL in view (fast loads,
+    // or hideMissing hid the new rows), no new intersection event will ever come — check
+    // directly and chain the next page. loading/loadingMore/hasMore gate the recursion.
+    maybeLoad();
     return () => observer.disconnect();
   }, [hasMore, loading, loadingMore, page, loadMedia]);
 
@@ -801,9 +804,6 @@ function MediaGalleryInner() {
             }`}
           >
             {hideMissing ? "Hiding missing" : "Hide missing media"}
-            {failedCount > 0 && (
-              <span className="ml-1 opacity-70">({failedCount})</span>
-            )}
           </button>
         </div>
 

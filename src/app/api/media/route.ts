@@ -11,29 +11,6 @@ const MIME_TYPES: Record<string, string> = {
   ".aac": "audio/aac",
 };
 
-function findFolderRecursive(root: string, folderName: string, maxDepth: number): string | null {
-  if (maxDepth <= 0) return null;
-  try {
-    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) return null;
-    const entries = fs.readdirSync(root);
-    for (const entry of entries) {
-      if (entry === folderName) {
-        const full = path.join(root, entry);
-        try { if (fs.statSync(full).isDirectory()) return full; } catch {}
-      }
-    }
-    for (const entry of entries) {
-      try {
-        const full = path.join(root, entry);
-        if (!fs.statSync(full).isDirectory() || entry.startsWith('.')) continue;
-        const found = findFolderRecursive(full, folderName, maxDepth - 1);
-        if (found) return found;
-      } catch {}
-    }
-  } catch {}
-  return null;
-}
-
 // Where to hunt for media folders that browser (upload://) imports can't locate on their
 // own. CT_MEDIA_DIRS (semicolon-separated, optional) is checked first, then legacy defaults.
 // This is just a fast-path list; findExportRoot() below is the general, machine-independent
@@ -106,7 +83,15 @@ function findExportRoot(rootName: string): string | null {
   return null;
 }
 
-function resolveSourceDir(db: any, sourceId: string, ignorePersisted = false): { dir: string | null; debug?: string; needsPersist?: boolean } {
+// Per-source in-memory caches so a source's directory is hunted AT MOST ONCE, ever, per
+// server run. Without these, every missing file (URL gifs, photos absent from the export)
+// re-ran the deep disk hunt — 40+ SECONDS per 404, serializing and starving the browser's
+// request queue until the whole app felt dead.
+const _dirCache = new Map<string, string>();      // sourceId -> known-good dir (unverified ok)
+const _failCache = new Map<string, number>();     // sourceId -> when deep hunt found nothing
+const FAIL_TTL_MS = 10 * 60 * 1000;
+
+function resolveSourceDir(db: any, sourceId: string, ignorePersisted = false, deep = false): { dir: string | null; debug?: string; needsPersist?: boolean } {
   const safeId = sourceId.replace(/'/g, "''");
   const result = db.exec(`SELECT file_path, metadata FROM sources WHERE id = '${safeId}'`);
   const sourcePath = result[0]?.values[0]?.[0] as string | undefined;
@@ -167,9 +152,9 @@ function resolveSourceDir(db: any, sourceId: string, ignorePersisted = false): {
 
     // General machine-independent resolve: find the export ROOT anywhere on local storage,
     // then the conversation folder = <exportRoot>\<rest-of-relative-path> (media beside the
-    // json). This is what makes an export in ANY location (Trish's D:\Storage Drive I
-    // Backup\..., a copy on another PC, etc.) resolve without hardcoded paths.
-    if (firstSeg && !firstSeg.includes(".")) {
+    // json). EXPENSIVE (walks drives) — only in deep mode, which GET runs at most once per
+    // source thanks to _dirCache/_failCache.
+    if (deep && firstSeg && !firstSeg.includes(".")) {
       const exportRoot = findExportRoot(firstSeg);
       if (exportRoot) {
         const rest = segments.slice(1);
@@ -235,12 +220,9 @@ export async function GET(request: NextRequest) {
     }
 
     const db = await getDb();
+    // Cheap resolve only: persisted path, sibling source, direct existsSync joins.
     const resolved = resolveSourceDir(db, sourceId);
-    const sourceDir = resolved.dir;
-    if (!sourceDir) {
-      console.error(`[media] resolve failed for source=${sourceId}: ${resolved.debug}`);
-      return NextResponse.json({ error: `Source not found or no local path available`, debug: resolved.debug }, { status: 404 });
-    }
+    let sourceDir = resolved.dir || _dirCache.get(sourceId) || null;
 
     const subdirs = mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used"]
       : mediaType === "video" ? ["videos"]
@@ -249,45 +231,38 @@ export async function GET(request: NextRequest) {
       : mediaType === "gif" ? ["gifs", "photos"]
       : ["photos", "gifs", "stickers", "stickers_used", "videos", "audio", "files"];
 
-    let filePath = findFile(sourceDir, filename, subdirs);
+    let filePath = sourceDir ? findFile(sourceDir, filename, subdirs) : null;
     let usedDir = sourceDir;
 
-    // The resolved dir didn't contain the file — re-run the whole search chain ignoring
-    // any persisted localMediaPath. This heals sources whose export was copied into a
-    // media dir AFTER import, and sources poisoned by an earlier wrong guess.
-    if (!filePath) {
-      const fresh = resolveSourceDir(db, sourceId, true);
-      if (fresh.dir && fresh.dir !== sourceDir) {
-        const p2 = findFile(fresh.dir, filename, subdirs);
-        if (p2) { filePath = p2; usedDir = fresh.dir; }
+    // No directory known for this source at all — run the DEEP hunt (drive walk), but at
+    // most once per source: the outcome (good dir or definitive failure) is cached, so
+    // every later request — including 404s for files absent from the export — is instant.
+    if (!filePath && !sourceDir) {
+      const failedAt = _failCache.get(sourceId);
+      if (failedAt && Date.now() - failedAt < FAIL_TTL_MS) {
+        return NextResponse.json({ error: `Source media folder not found (cached)`, debug: resolved.debug }, { status: 404 });
+      }
+      const deep = resolveSourceDir(db, sourceId, true, true);
+      if (deep.dir) {
+        _dirCache.set(sourceId, deep.dir);
+        sourceDir = usedDir = deep.dir;
+        filePath = findFile(deep.dir, filename, subdirs);
+      } else {
+        _failCache.set(sourceId, Date.now());
+        console.error(`[media] deep resolve failed for source=${sourceId}: ${deep.debug}`);
+        return NextResponse.json({ error: `Source not found or no local path available`, debug: deep.debug }, { status: 404 });
       }
     }
 
     if (!filePath) {
-      const safeId3 = sourceId!.replace(/'/g, "''");
-      const srcResult = db.exec(`SELECT file_path FROM sources WHERE id = '${safeId3}'`);
-      const srcPath = srcResult[0]?.values[0]?.[0] as string | undefined;
-      const folderName2 = srcPath?.startsWith("upload://")
-        ? srcPath.replace("upload://", "").split(/[/\\]/).filter(Boolean).pop()
-        : null;
-      if (folderName2 && folderName2 !== "." && !folderName2.includes(".")) {
-        for (const sd of mediaSearchDirs()) {
-          const found = findFolderRecursive(sd, folderName2, 8);
-          if (found && found !== sourceDir) {
-            const fpath = findFile(found, filename, subdirs);
-            if (fpath) { filePath = fpath; usedDir = found; break; }
-          }
-        }
-      }
-    }
-
-    if (!filePath) {
+      // Directory is known and trusted — the file simply isn't in the export. 404 NOW;
+      // no per-file hunting (that's what made every missing photo cost 40+ seconds).
       return NextResponse.json({ error: `File not found: ${filename}` }, { status: 404 });
     }
 
     // Persist the working directory ONLY now that a file was actually served from it.
     // (Persisting unverified guesses used to poison sources with a wrong root forever.)
-    if (resolved.needsPersist || usedDir !== sourceDir) {
+    if (resolved.needsPersist || usedDir !== resolved.dir) {
       try {
         const safeId2 = sourceId.replace(/'/g, "''");
         const metaResult = db.exec(`SELECT metadata FROM sources WHERE id = '${safeId2}'`);
@@ -297,6 +272,7 @@ export async function GET(request: NextRequest) {
         meta.localMediaPath = usedDir;
         db.run(`UPDATE sources SET metadata = ? WHERE id = ?`, [JSON.stringify(meta), sourceId]);
         scheduleSave();
+        _dirCache.delete(sourceId);
       } catch {}
     }
 
