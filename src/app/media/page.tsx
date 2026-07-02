@@ -327,30 +327,7 @@ function MediaGalleryInner() {
   }, [prefsLoaded, selectedSources, selectedConversations, selectedSenders, selectedPlatforms,
       selectedMediaTypes, dateFrom, dateTo, sortOrder, thumbSize, groupByDate, hideMissing]);
 
-  // Keyboard navigation for lightbox
-  useEffect(() => {
-    if (!lightboxItem) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") { setLightboxItem(null); return; }
-      const isUsable = (it: MediaItem) => {
-        if (it.media_type === "audio") return false;
-        if (hideMissing && failedIdsRef.current.has(it.media_id)) return false;
-        return true;
-      };
-      const currentIdx = items.findIndex(i => i.media_id === lightboxItem!.media_id);
-      if (e.key === "ArrowLeft") {
-        for (let i = currentIdx - 1; i >= 0; i--) {
-          if (isUsable(items[i])) { setLightboxItem(items[i]); break; }
-        }
-      } else if (e.key === "ArrowRight") {
-        for (let i = currentIdx + 1; i < items.length; i++) {
-          if (isUsable(items[i])) { setLightboxItem(items[i]); break; }
-        }
-      }
-    }
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [lightboxItem, items, hideMissing]);
+  // Lightbox keyboard nav + load-ahead is defined lower (it needs loadMedia).
 
   // Preload nearby images for smooth lightbox navigation
   useEffect(() => {
@@ -580,6 +557,59 @@ function MediaGalleryInner() {
     const tick = setInterval(maybeLoad, 700);
     return () => { observer.disconnect(); clearInterval(tick); };
   }, [hasMore, loading, loadingMore, page, loadMedia]);
+
+  // --- Lightbox navigation with load-ahead ---------------------------------
+  // Arrowing forward pulls in the next page as it nears the end, so the preview keeps
+  // going through the whole set (and the grid keeps filling in behind it) instead of
+  // freezing at the last loaded picture.
+  const pendingAdvanceRef = useRef<string | null>(null);
+  const nextUsableFrom = useCallback((fromIdx: number, dir: 1 | -1) => {
+    for (let i = fromIdx + dir; i >= 0 && i < items.length; i += dir) {
+      const it = items[i];
+      if (it.media_type === "audio") continue;
+      if (hideMissing && failedIdsRef.current.has(it.media_id)) continue;
+      return i;
+    }
+    return -1;
+  }, [items, hideMissing]);
+
+  const goLightbox = useCallback((dir: 1 | -1) => {
+    if (!lightboxItem) return;
+    const idx = items.findIndex(i => i.media_id === lightboxItem.media_id);
+    if (idx < 0) return;
+    const nextIdx = nextUsableFrom(idx, dir);
+    // Keep loading ahead (like continuous scroll) whenever we're within a page's reach of
+    // the end. autoChainRef reset = treat arrowing as user activity, past the idle cap.
+    if (dir === 1 && hasMore && !loadingMore && (nextIdx < 0 || nextIdx >= items.length - 8)) {
+      autoChainRef.current = 0;
+      loadMedia(page + 1, true);
+    }
+    if (nextIdx >= 0) setLightboxItem(items[nextIdx]);
+    else if (dir === 1 && hasMore) pendingAdvanceRef.current = lightboxItem.media_id; // advance when it arrives
+  }, [lightboxItem, items, hasMore, loadingMore, page, loadMedia, nextUsableFrom]);
+
+  // Complete a pending forward-advance once the next page has appended.
+  useEffect(() => {
+    const pid = pendingAdvanceRef.current;
+    if (!pid) return;
+    const idx = items.findIndex(i => i.media_id === pid);
+    if (idx < 0) { if (!hasMore) pendingAdvanceRef.current = null; return; }
+    const nextIdx = nextUsableFrom(idx, 1);
+    if (nextIdx >= 0) { pendingAdvanceRef.current = null; setLightboxItem(items[nextIdx]); }
+    else if (!hasMore) pendingAdvanceRef.current = null;
+  }, [items, hasMore, nextUsableFrom]);
+
+  // Keyboard nav for the lightbox (here so it can trigger load-ahead via goLightbox).
+  useEffect(() => {
+    if (!lightboxItem) return;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") { setLightboxItem(null); return; }
+      if (e.key === "ArrowLeft") { e.preventDefault(); goLightbox(-1); }
+      else if (e.key === "ArrowRight") { e.preventDefault(); goLightbox(1); }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [lightboxItem, goLightbox]);
 
   function toggleConversation(id: string) {
     setSelectedConversations((prev) => {
@@ -942,15 +972,15 @@ function MediaGalleryInner() {
         >
           {prevItem && (
             <button
-              onClick={(e) => { e.stopPropagation(); setLightboxItem(prevItem); }}
+              onClick={(e) => { e.stopPropagation(); goLightbox(-1); }}
               className="fixed left-4 top-1/2 -translate-y-1/2 z-[102] w-12 h-12 rounded-full bg-black/60 text-white text-2xl flex items-center justify-center hover:bg-black/80 transition"
             >
               ‹
             </button>
           )}
-          {nextItem && (
+          {(nextItem || hasMore) && (
             <button
-              onClick={(e) => { e.stopPropagation(); setLightboxItem(nextItem); }}
+              onClick={(e) => { e.stopPropagation(); goLightbox(1); }}
               className="fixed right-4 top-1/2 -translate-y-1/2 z-[102] w-12 h-12 rounded-full bg-black/60 text-white text-2xl flex items-center justify-center hover:bg-black/80 transition"
             >
               ›
