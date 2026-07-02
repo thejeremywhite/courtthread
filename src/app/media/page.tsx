@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, Suspense, memo } from "react";
-import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { ImportPicker } from "@/components/ImportPicker";
 
@@ -246,9 +245,6 @@ function saveMediaPrefs(prefs: Record<string, any>) {
 }
 
 function MediaGalleryInner() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const pathname = usePathname();
 
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
@@ -662,8 +658,9 @@ function MediaGalleryInner() {
 
   const handleClickImage = useCallback((item: MediaItem) => setLightboxItem(item), []);
   const handleShowInConversation = useCallback((item: MediaItem) => {
-    router.push(`/conversations/${item.conversation_id}?messageId=${item.message_id}`);
-  }, [router]);
+    // New tab — preserve the gallery's scroll/filters/preview (same as the lightbox link).
+    window.open(`/conversations/${item.conversation_id}?messageId=${item.message_id}`, "_blank", "noopener");
+  }, []);
 
   const handleMediaFailed = useCallback((mediaId: string) => {
     if (!failedIdsRef.current.has(mediaId)) {
@@ -684,7 +681,9 @@ function MediaGalleryInner() {
   }
 
   function showInConversation(item: MediaItem) {
-    router.push(`/conversations/${item.conversation_id}?messageId=${item.message_id}`);
+    // Open in a NEW TAB so the media gallery (scroll position, filters, the open preview)
+    // is preserved — going back in the same tab lost the user's place entirely.
+    window.open(`/conversations/${item.conversation_id}?messageId=${item.message_id}`, "_blank", "noopener");
   }
 
   const filteredConversations = availableConversations.filter((c) => {
