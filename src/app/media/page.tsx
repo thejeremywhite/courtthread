@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, Suspense, memo } from "react";
+import { useSearchParams } from "next/navigation";
 import { DateTimePicker } from "@/components/DateTimePicker";
 import { ImportPicker } from "@/components/ImportPicker";
 
@@ -245,6 +246,8 @@ function saveMediaPrefs(prefs: Record<string, any>) {
 }
 
 function MediaGalleryInner() {
+  const searchParams = useSearchParams();
+  const cameFromConversationRef = useRef(false);
 
   const [prefsLoaded, setPrefsLoaded] = useState(false);
 
@@ -264,6 +267,29 @@ function MediaGalleryInner() {
   const [hideMissing, setHideMissing] = useState(false);
 
   useEffect(() => {
+    // Arriving from a conversation's "Media" button: start fresh, scoped to just that
+    // conversation, instead of restoring whatever was previously browsed (same pattern
+    // as Search's conversationId handling).
+    const convId = searchParams.get("conversationId");
+    if (convId) {
+      cameFromConversationRef.current = true;
+      setSelectedConversations(new Set([convId]));
+      fetch(`/api/conversations/${convId}`).then((r) => r.json()).then((d) => {
+        if (d.source_id) setSelectedSources(new Set([d.source_id]));
+        setAvailableConversations((prev) => {
+          if (prev.some((c) => c.id === convId)) return prev;
+          return [...prev, {
+            id: convId,
+            title: d.title || d.participant_names || "Untitled",
+            platform: d.platform || "",
+            message_count: d.message_count || 0,
+            participant_names: d.participant_names || null,
+          }];
+        });
+      }).catch(() => {});
+      setPrefsLoaded(true);
+      return;
+    }
     const saved = loadMediaPrefs();
     if (saved.sources?.length) setSelectedSources(new Set(saved.sources));
     if (saved.conversations?.length) setSelectedConversations(new Set(saved.conversations));
@@ -277,6 +303,7 @@ function MediaGalleryInner() {
     if (saved.groupByDate !== undefined) setGroupByDate(saved.groupByDate);
     if (saved.hideMissing !== undefined) setHideMissing(saved.hideMissing);
     setPrefsLoaded(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [failedCount, setFailedCount] = useState(0);
   const failedCountRef = useRef(0);
@@ -361,10 +388,15 @@ function MediaGalleryInner() {
 
   useEffect(() => {
     if (selectedSources.size === 0) {
+      // Arriving from a conversation link: selectedConversations is already seeded, but
+      // its source is still being looked up asynchronously (selectedSources is briefly
+      // empty during that window) — don't let this effect race in and clear it first.
+      if (cameFromConversationRef.current) return;
       setAvailableConversations([]);
       setSelectedConversations((prev) => (prev.size === 0 ? prev : new Set()));
       return;
     }
+    cameFromConversationRef.current = false;
     const promises = Array.from(selectedSources).map((srcId) =>
       fetch(`/api/conversations?sourceId=${srcId}&limit=500`).then((r) => r.json())
     );

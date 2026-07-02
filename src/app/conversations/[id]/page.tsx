@@ -342,6 +342,10 @@ export default function ConversationPage() {
           className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)]/50 transition">
           Search
         </Link>
+        <Link href={`/media?conversationId=${id}`}
+          className="px-3 py-1.5 rounded-lg border border-[var(--border)] text-sm text-[var(--muted-foreground)] hover:border-[var(--primary)]/50 transition">
+          Media
+        </Link>
         <button
           onClick={() => setShowFilters(!showFilters)}
           className={`px-3 py-1.5 rounded-lg border text-sm transition ${
