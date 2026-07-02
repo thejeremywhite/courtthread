@@ -1147,7 +1147,7 @@ function SearchPageInner() {
           <PersonSearch
             placeholder="Search person..."
             sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
-            excludeIds={new Set(excludedParticipants.map((p) => p.id))}
+            excludeIds={new Set([...selectedParticipants, ...excludedParticipants].map((p) => p.id))}
             onSelect={addParticipant}
             className="w-52"
           />
@@ -1204,7 +1204,7 @@ function SearchPageInner() {
           <PersonSearch
             placeholder="Exclude person..."
             sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
-            excludeIds={new Set(selectedParticipants.map((p) => p.id))}
+            excludeIds={new Set([...selectedParticipants, ...excludedParticipants].map((p) => p.id))}
             onSelect={addExcludedParticipant}
             className="w-52"
           />

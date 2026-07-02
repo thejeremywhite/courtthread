@@ -256,6 +256,10 @@ function MediaGalleryInner() {
   const [selectedSources, setSelectedSources] = useState<Set<string>>(new Set());
   const [selectedConversations, setSelectedConversations] = useState<Set<string>>(new Set());
   const [selectedSenders, setSelectedSenders] = useState<Set<string>>(new Set());
+  // Picked via "Search person" — tracked SEPARATELY from selectedConversations (the manual
+  // Conversations-dropdown checkboxes) so there's a dedicated, removable chip and picking a
+  // person never silently merges into / gets confused with a manual selection.
+  const [includedParticipants, setIncludedParticipants] = useState<PersonSuggestion[]>([]);
   // Exempts whole conversations these people are part of (e.g. the "Facebook user"
   // placeholder or numeric-only unresolved names) from the media grid entirely.
   const [excludedParticipants, setExcludedParticipants] = useState<PersonSuggestion[]>([]);
@@ -299,6 +303,7 @@ function MediaGalleryInner() {
     if (saved.sources?.length) setSelectedSources(new Set(saved.sources));
     if (saved.conversations?.length) setSelectedConversations(new Set(saved.conversations));
     if (saved.senders?.length) setSelectedSenders(new Set(saved.senders));
+    if (saved.includedParticipants?.length) setIncludedParticipants(saved.includedParticipants);
     if (saved.excludedParticipants?.length) setExcludedParticipants(saved.excludedParticipants);
     if (saved.platforms?.length) setSelectedPlatforms(new Set(saved.platforms));
     if (saved.mediaTypes?.length) setSelectedMediaTypes(new Set(saved.mediaTypes));
@@ -345,6 +350,7 @@ function MediaGalleryInner() {
       sources: Array.from(selectedSources),
       conversations: Array.from(selectedConversations),
       senders: Array.from(selectedSenders),
+      includedParticipants,
       excludedParticipants,
       platforms: Array.from(selectedPlatforms),
       mediaTypes: Array.from(selectedMediaTypes),
@@ -356,7 +362,7 @@ function MediaGalleryInner() {
       hideMissing,
       convSearchText,
     });
-  }, [prefsLoaded, selectedSources, selectedConversations, selectedSenders, excludedParticipants,
+  }, [prefsLoaded, selectedSources, selectedConversations, includedParticipants, selectedSenders, excludedParticipants,
       selectedPlatforms, selectedMediaTypes, dateFrom, dateTo, sortOrder, thumbSize, groupByDate,
       hideMissing, convSearchText]);
 
@@ -458,7 +464,11 @@ function MediaGalleryInner() {
     // the auto-loader chained through the entire catalog "incessantly".)
     if (hideMissing) body.hideMissing = true;
     if (selectedSources.size > 0) body.sourceIds = Array.from(selectedSources);
-    if (selectedConversations.size > 0) body.conversationIds = Array.from(selectedConversations);
+    // Union of the manual Conversations-dropdown checkboxes AND every included person's
+    // conversations (kept as separate state so each has its own removable chip).
+    const includeConvIds = new Set(selectedConversations);
+    for (const p of includedParticipants) for (const c of p.conversations) includeConvIds.add(c.id);
+    if (includeConvIds.size > 0) body.conversationIds = Array.from(includeConvIds);
     if (selectedSenders.size > 0) body.senderNames = Array.from(selectedSenders);
     // Resolve each excluded PERSON to conversation ids (not participant ids): one display
     // name like "Facebook user" can be a separate participant row per import, so a name-
@@ -495,7 +505,7 @@ function MediaGalleryInner() {
 
   const loadMedia = useCallback(async (loadPage = 1, append = false) => {
     const hasScope = selectedSources.size > 0 || selectedConversations.size > 0
-      || selectedSenders.size > 0 || selectedPlatforms.size > 0
+      || includedParticipants.length > 0 || selectedSenders.size > 0 || selectedPlatforms.size > 0
       || !!dateFrom || !!dateTo;
 
     if (!hasScope) {
@@ -554,18 +564,18 @@ function MediaGalleryInner() {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [selectedSources, selectedConversations, selectedSenders, excludedParticipants,
+  }, [selectedSources, selectedConversations, includedParticipants, selectedSenders, excludedParticipants,
       selectedPlatforms, selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
 
   // Auto-search when any filter changes (incl. Hide missing - it's server-side now)
   useEffect(() => {
     const hasScope = selectedSources.size > 0 || selectedConversations.size > 0
-      || selectedSenders.size > 0 || selectedPlatforms.size > 0
+      || includedParticipants.length > 0 || selectedSenders.size > 0 || selectedPlatforms.size > 0
       || !!dateFrom || !!dateTo;
     if (!hasScope) return;
     setPage(1);
     loadMedia(1);
-  }, [selectedSources, selectedConversations, selectedSenders, excludedParticipants,
+  }, [selectedSources, selectedConversations, includedParticipants, selectedSenders, excludedParticipants,
       selectedPlatforms, selectedMediaTypes, dateFrom, dateTo, sortOrder, hideMissing]);
 
   // HARD CAP on pages loaded without a real user scroll: a runaway chain once appended
@@ -675,17 +685,20 @@ function MediaGalleryInner() {
 
   // Picking a person broadens scope to include all their conversations (mirrors Search's
   // include-participant); excluding removes any conversation involving that person entirely.
+  // Both are kept as their OWN chip lists (not merged into selectedConversations) so there's
+  // a visible, individually-removable indicator for each pick.
   function addIncludedPerson(p: PersonSuggestion) {
-    setSelectedConversations((prev) => {
-      const next = new Set(prev);
-      for (const c of p.conversations) next.add(c.id);
-      return next;
-    });
+    setIncludedParticipants((prev) => prev.some((x) => x.id === p.id) ? prev : [...prev, p]);
     setExcludedParticipants((prev) => prev.filter((x) => x.id !== p.id));
+  }
+
+  function removeIncludedPerson(id: string) {
+    setIncludedParticipants((prev) => prev.filter((x) => x.id !== id));
   }
 
   function addExcludedPerson(p: PersonSuggestion) {
     setExcludedParticipants((prev) => prev.some((x) => x.id === p.id) ? prev : [...prev, p]);
+    setIncludedParticipants((prev) => prev.filter((x) => x.id !== p.id));
   }
 
   function removeExcludedPerson(id: string) {
@@ -712,6 +725,7 @@ function MediaGalleryInner() {
     setSelectedSources(new Set());
     setSelectedConversations(new Set());
     setSelectedSenders(new Set());
+    setIncludedParticipants([]);
     setExcludedParticipants([]);
     setSelectedPlatforms(new Set());
     setSelectedMediaTypes(new Set());
@@ -865,7 +879,7 @@ function MediaGalleryInner() {
             placeholder="Search person..."
             sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
             conversationId={selectedConversations.size === 1 ? Array.from(selectedConversations)[0] : undefined}
-            excludeIds={new Set(excludedParticipants.map((p) => p.id))}
+            excludeIds={new Set([...includedParticipants, ...excludedParticipants].map((p) => p.id))}
             onSelect={addIncludedPerson}
             className="w-44"
           />
@@ -876,6 +890,7 @@ function MediaGalleryInner() {
             placeholder="Exclude person..."
             sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
             conversationId={selectedConversations.size === 1 ? Array.from(selectedConversations)[0] : undefined}
+            excludeIds={new Set([...includedParticipants, ...excludedParticipants].map((p) => p.id))}
             onSelect={addExcludedPerson}
             className="w-44"
           />
@@ -960,9 +975,12 @@ function MediaGalleryInner() {
           </button>
         </div>
 
-        {/* Excluded people */}
-        {excludedParticipants.length > 0 && (
+        {/* Included / excluded people */}
+        {(includedParticipants.length > 0 || excludedParticipants.length > 0) && (
           <div className="flex flex-wrap gap-1.5">
+            {includedParticipants.map((p) => (
+              <PersonChip key={p.id} person={p} onRemove={() => removeIncludedPerson(p.id)} />
+            ))}
             {excludedParticipants.map((p) => (
               <PersonChip key={p.id} person={p} tone="destructive" onRemove={() => removeExcludedPerson(p.id)} />
             ))}

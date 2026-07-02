@@ -100,7 +100,8 @@ export function PersonSearch({ placeholder, sourceId, conversationId, excludeIds
 }
 
 // Small removable chip for a selected include/exclude person — consistent look across
-// the three pages that use PersonSearch.
+// the three pages that use PersonSearch. Labeled explicitly (not just colored) so it's
+// unambiguous at a glance which it is.
 export function PersonChip({ person, onRemove, tone = "primary" }: {
   person: PersonSuggestion;
   onRemove: () => void;
@@ -111,6 +112,9 @@ export function PersonChip({ person, onRemove, tone = "primary" }: {
     : "bg-[var(--primary)]/10 text-[var(--primary)] border-[var(--primary)]/30";
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border ${toneClass}`}>
+      <span className="font-semibold uppercase tracking-wide text-[10px] opacity-80">
+        {tone === "destructive" ? "Exclude" : "Include"}
+      </span>
       {person.display_name}
       <button onClick={onRemove} className="hover:opacity-70" title="Remove">×</button>
     </span>

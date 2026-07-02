@@ -176,14 +176,14 @@ export default function ConversationsPage() {
         <PersonSearch
           placeholder="Search person..."
           sourceId={sourceFilter || undefined}
-          excludeIds={new Set(excludedParticipants.map((p) => p.id))}
+          excludeIds={new Set([...includedParticipants, ...excludedParticipants].map((p) => p.id))}
           onSelect={addIncludedPerson}
           className="w-44"
         />
         <PersonSearch
           placeholder="Exclude person..."
           sourceId={sourceFilter || undefined}
-          excludeIds={new Set(includedParticipants.map((p) => p.id))}
+          excludeIds={new Set([...includedParticipants, ...excludedParticipants].map((p) => p.id))}
           onSelect={addExcludedPerson}
           className="w-44"
         />
