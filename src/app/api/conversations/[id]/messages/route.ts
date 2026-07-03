@@ -58,7 +58,7 @@ export async function GET(
       let aTs: string | undefined;
       if (anchor) {
         const safeAnchor = anchor.replace(/'/g, "''");
-        const aRes = db.exec(`SELECT timestamp FROM messages WHERE id = '${safeAnchor}' AND ${conversationFilter}`);
+        const aRes = db.exec(`SELECT timestamp FROM messages m WHERE m.id = '${safeAnchor}' AND ${conversationFilter}`);
         aTs = aRes[0]?.values[0]?.[0] as string | undefined;
       } else {
         aTs = anchorTime.replace(/'/g, "''");
@@ -90,7 +90,7 @@ export async function GET(
         const rows = [...before, ...after];
         const totalRes = isGrouped
           ? db.exec(`SELECT COUNT(*) FROM (SELECT DISTINCT p.display_name, substr(m.timestamp,1,19), m.content FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter})`)
-          : db.exec(`SELECT COUNT(*) FROM messages WHERE ${conversationFilter}`);
+          : db.exec(`SELECT COUNT(*) FROM messages m WHERE ${conversationFilter}`);
         const total = (totalRes[0]?.values[0]?.[0] as number) || 0;
         const hasMore = after.length >= afterWin;
         return NextResponse.json({
