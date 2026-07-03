@@ -546,14 +546,10 @@ function SearchPageInner() {
     });
   }
 
-  // All-imports-selected is the DEFAULT (not a filter), so don't render a chip per
-  // source in that case — only show source chips when narrowed to a subset.
+  // Selected imports are already summarized in the picker's own button label
+  // ("N of M imports (K msgs)") — no need to also spam a chip per import here.
   const allSrcSelected = sources.length > 0 && selectedSources.size === sources.length;
   const scopeChips: ScopeChip[] = [
-    ...(allSrcSelected ? [] : Array.from(selectedSources).map((id) => {
-      const src = sources.find((s) => s.id === id);
-      return { type: "source" as const, id, label: src ? cleanSourceName(src.filename) : id, detail: `${src?.message_count || 0} msgs` };
-    })),
     ...Array.from(selectedPlatforms).map((p) => ({
       type: "platform" as const, id: p, label: p,
     })),
