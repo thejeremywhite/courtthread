@@ -46,6 +46,8 @@ function matchedParticipants(s: ImportPickerSource, query: string): string[] {
 export function ImportPicker({ sources, selected, onChange, multi = true, placeholder = "Imports", label }: ImportPickerProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // null = original (API) order; "desc"/"asc" = sorted by message count.
+  const [sortBySize, setSortBySize] = useState<"desc" | "asc" | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -61,7 +63,16 @@ export function ImportPicker({ sources, selected, onChange, multi = true, placeh
     if (open) setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
-  const filtered = useMemo(() => sources.filter((s) => matches(s, query)), [sources, query]);
+  const filtered = useMemo(() => {
+    const list = sources.filter((s) => matches(s, query));
+    if (sortBySize) {
+      list.sort((a, b) => {
+        const diff = (b.message_count || 0) - (a.message_count || 0);
+        return sortBySize === "desc" ? diff : -diff;
+      });
+    }
+    return list;
+  }, [sources, query, sortBySize]);
 
   function toggle(id: string) {
     if (multi) {
@@ -104,13 +115,20 @@ export function ImportPicker({ sources, selected, onChange, multi = true, placeh
             className="w-full mb-2 px-3 py-1.5 rounded-lg border border-[var(--border)] bg-[var(--background)] text-sm"
           />
           {multi && (
-            <div className="flex gap-2 mb-2 px-1">
+            <div className="flex items-center gap-2 mb-2 px-1">
               <button onClick={() => onChange(new Set([...selected, ...filtered.map((s) => s.id)]))}
                 className="text-xs text-[var(--primary)] hover:underline">
                 Select all{query ? " matching" : ""}
               </button>
               <button onClick={() => onChange(new Set())}
                 className="text-xs text-[var(--destructive)] hover:underline">Deselect all</button>
+              <button
+                onClick={() => setSortBySize((prev) => (prev === "desc" ? "asc" : "desc"))}
+                title="Sort by number of messages"
+                className={`ml-auto text-xs flex items-center gap-0.5 hover:underline ${sortBySize ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`}
+              >
+                Sort {sortBySize === "asc" ? "↑" : sortBySize === "desc" ? "↓" : "↕"}
+              </button>
             </div>
           )}
           <div className="max-h-64 overflow-y-auto">
