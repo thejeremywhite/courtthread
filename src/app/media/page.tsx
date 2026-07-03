@@ -416,11 +416,13 @@ function MediaGalleryInner() {
       return;
     }
     cameFromConversationRef.current = false;
-    const promises = Array.from(selectedSources).map((srcId) =>
-      fetch(`/api/conversations?sourceId=${srcId}&limit=500`).then((r) => r.json())
-    );
-    Promise.all(promises).then((results) => {
-      const all = results.flatMap((r) => r.conversations || []);
+    // One batched request for ALL selected sources — firing one fetch PER source (as this
+    // used to) meant selecting a large number of imports opened that many simultaneous
+    // connections, starving the browser's connection pool and breaking other requests.
+    fetch(`/api/conversations?sourceIds=${Array.from(selectedSources).join(",")}&limit=5000`)
+      .then((r) => r.json())
+      .then((data) => {
+      const all = data.conversations || [];
       setAvailableConversations(all);
       const validIds = new Set(all.map((c: ConversationRow) => c.id));
       setSelectedConversations((prev) => {

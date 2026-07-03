@@ -7,6 +7,8 @@ export async function GET(request: NextRequest) {
     const q = request.nextUrl.searchParams.get("q") || "";
     const platform = request.nextUrl.searchParams.get("platform") || "";
     const sourceId = request.nextUrl.searchParams.get("sourceId") || "";
+    const sourceIds = (request.nextUrl.searchParams.get("sourceIds") || "")
+      .split(",").filter(Boolean);
     const cursor = request.nextUrl.searchParams.get("cursor") || "";
     const sort = request.nextUrl.searchParams.get("sort") || "newest";
     const dateFrom = request.nextUrl.searchParams.get("dateFrom") || "";
@@ -30,6 +32,10 @@ export async function GET(request: NextRequest) {
     }
     if (sourceId) {
       where += ` AND c.source_id = '${sourceId.replace(/'/g, "''")}'`;
+    }
+    if (sourceIds.length > 0) {
+      const safe = sourceIds.map((sid) => `'${sid.replace(/'/g, "''")}'`).join(",");
+      where += ` AND c.source_id IN (${safe})`;
     }
     if (conversationIds.length > 0) {
       const safe = conversationIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");

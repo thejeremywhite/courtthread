@@ -336,6 +336,12 @@ function SearchPageInner() {
 
   const cameFromConversationRef = useRef(false);
   const clearedRef = useRef(false);
+  // Guards against overlapping searches (the auto-search-on-filter-change effect can fire a
+  // new request before a slow prior one resolves): each call claims the next id, and only
+  // the response matching the CURRENT id is allowed to update state. Otherwise a stale
+  // request's late failure could overwrite a newer request's already-rendered success —
+  // exactly what looked like a "results appeared but the error banner won't go away" bug.
+  const searchRequestIdRef = useRef(0);
 
   // Decide initial state on mount: a conversation-scoped search starts fresh;
   // otherwise restore the saved session so navigating away and back is lossless.
@@ -479,11 +485,14 @@ function SearchPageInner() {
       setSelectedConversations((prev) => (prev.size === 0 ? prev : new Set()));
       return;
     }
-    const promises = Array.from(selectedSources).map((srcId) =>
-      fetch(`/api/conversations?sourceId=${srcId}&limit=500`).then((r) => r.json())
-    );
-    Promise.all(promises).then((results) => {
-      const all = results.flatMap((r) => r.conversations || []);
+    // One batched request for ALL selected sources — firing one fetch PER source (as this
+    // used to) meant selecting "all imports" (900+) opened 900+ simultaneous connections,
+    // which starved the browser's connection pool and made even the actual search request
+    // fail ("Failed to fetch").
+    fetch(`/api/conversations?sourceIds=${Array.from(selectedSources).join(",")}&limit=5000`)
+      .then((r) => r.json())
+      .then((data) => {
+      const all = data.conversations || [];
       setAvailableConversations(all);
       // Drop any selected conversations that don't belong to the now-selected imports,
       // so switching imports doesn't leave a stale conversation filter that returns nothing.
@@ -665,6 +674,7 @@ function SearchPageInner() {
     if (append) setLoadingMore(true); else setSearching(true);
     if (!append) setError(null);
     setPage(searchPage);
+    const requestId = ++searchRequestIdRef.current;
 
     try {
       let effectiveQuery = trimmed;
@@ -722,6 +732,7 @@ function SearchPageInner() {
         body: JSON.stringify(body),
       });
       const data = await res.json();
+      if (requestId !== searchRequestIdRef.current) return; // superseded by a newer search
       if (!res.ok) throw new Error(data.error);
       const newHasMore = searchPage * 50 < data.total;
       if (data.mode === "conversations") {
@@ -738,10 +749,13 @@ function SearchPageInner() {
       // Persistence is handled by the single auto-save effect (fires whenever results/
       // total/hasMoreResults change, right after these setters above take effect).
     } catch (e: any) {
+      if (requestId !== searchRequestIdRef.current) return; // superseded by a newer search
       setError(e.message);
     } finally {
-      setSearching(false);
-      setLoadingMore(false);
+      if (requestId === searchRequestIdRef.current) {
+        setSearching(false);
+        setLoadingMore(false);
+      }
     }
   }
 
