@@ -106,19 +106,6 @@ export async function backfillDuplicateGroups(): Promise<{
     buckets.get(key)!.push(c);
   }
 
-  const participantsCache = new Map<string, Set<string>>();
-  const getParticipants = (id: string): Set<string> => {
-    if (participantsCache.has(id)) return participantsCache.get(id)!;
-    const safeId = id.replace(/'/g, "''");
-    const res = db.exec(
-      `SELECT DISTINCT p.display_name FROM conversation_participants cp
-       JOIN participants p ON p.id = cp.participant_id WHERE cp.conversation_id = '${safeId}'`
-    );
-    const set = new Set((res[0]?.values || []).map((r: any[]) => (r[0] as string).trim().toLowerCase()));
-    participantsCache.set(id, set);
-    return set;
-  };
-
   const sigCache = new Map<string, Set<string>>();
   const getSignatures = (id: string): Set<string> => {
     if (sigCache.has(id)) return sigCache.get(id)!;
@@ -150,12 +137,11 @@ export async function backfillDuplicateGroups(): Promise<{
       for (let j = i + 1; j < list.length; j++) {
         const a = list[i], b = list[j];
         if (a.last_message_at < b.first_message_at || b.last_message_at < a.first_message_at) continue;
-        const pa = getParticipants(a.id), pb = getParticipants(b.id);
-        if (pa.size !== pb.size || ![...pa].every((n) => pb.has(n))) continue;
         const sa = getSignatures(a.id), sb = getSignatures(b.id);
-        let overlap = false;
-        for (const s of sa) { if (sb.has(s)) { overlap = true; break; } }
-        if (overlap) union(a.id, b.id);
+        const required = Math.min(DUPLICATE_MIN_OVERLAP, sa.size, sb.size);
+        let overlap = 0;
+        for (const s of sa) { if (sb.has(s)) { overlap++; if (overlap >= required) break; } }
+        if (overlap >= required) union(a.id, b.id);
       }
     }
   }
@@ -325,10 +311,16 @@ export async function insertConversation(conv: {
 // as one conversation (messages deduped-by-content for display, unioning truncated/
 // complementary imports) while every original row stays intact for provenance.
 //
-// Matching is: same normalized title + platform + IDENTICAL participant name set (avoids
-// false-positive merges of two different chats that happen to share a generic name), with
-// an overlapping date range as a cheap SQL pre-filter, confirmed by finding at least one
-// message with an identical (sender, timestamp_ms, content) signature in both.
+// Matching is: same normalized title + platform, with an overlapping date range as a cheap
+// SQL pre-filter, confirmed by finding several messages with an identical
+// (sender, timestamp_ms, content) signature in both. Participant lists are NOT required to
+// match exactly — real Facebook exports of the "same" thread can legitimately list different
+// members depending on when it was exported (people leaving a group, etc.), so requiring
+// exact equality caused real duplicates to be missed. Multiple exact message-signature
+// matches (sender + millisecond timestamp + content, all identical) is a far stronger and
+// still effectively false-positive-proof signal on its own.
+const DUPLICATE_MIN_OVERLAP = 3;
+
 export async function findDuplicateGroup(
   title: string,
   platform: string,
@@ -352,31 +344,23 @@ export async function findDuplicateGroup(
   const candidates = (res[0]?.values || []).map((r: any[]) => ({ id: r[0] as string, groupId: r[1] as string | null }));
   if (candidates.length === 0) return null;
 
-  const wantedNames = new Set(participantNames.map((n) => n.trim().toLowerCase()));
   const incomingSigs = new Set(messages.map((m) => `${m.senderName}|${m.timestampMs}|${m.content || ""}`));
+  const requiredOverlap = Math.min(DUPLICATE_MIN_OVERLAP, messages.length);
 
   for (const cand of candidates) {
     const safeCandId = cand.id.replace(/'/g, "''");
-    const pRes = db.exec(`
-      SELECT DISTINCT p.display_name FROM conversation_participants cp
-      JOIN participants p ON p.id = cp.participant_id
-      WHERE cp.conversation_id = '${safeCandId}'
-    `);
-    const candNames = new Set((pRes[0]?.values || []).map((r: any[]) => (r[0] as string).trim().toLowerCase()));
-    if (candNames.size !== wantedNames.size || ![...wantedNames].every((n) => candNames.has(n))) continue;
-
     const mRes = db.exec(`
       SELECT m.timestamp_ms, m.content, p2.display_name
       FROM messages m JOIN participants p2 ON m.sender_id = p2.id
       WHERE m.conversation_id = '${safeCandId}'
     `);
     const candMsgs = mRes[0]?.values || [];
-    let overlap = false;
+    let overlap = 0;
     for (const row of candMsgs) {
       const sig = `${row[2]}|${row[0]}|${row[1] || ""}`;
-      if (incomingSigs.has(sig)) { overlap = true; break; }
+      if (incomingSigs.has(sig)) { overlap++; if (overlap >= requiredOverlap) break; }
     }
-    if (overlap) return cand.groupId || cand.id;
+    if (overlap >= requiredOverlap) return cand.groupId || cand.id;
   }
   return null;
 }
@@ -470,7 +454,14 @@ export async function getSources() {
   const namesBySource = new Map<string, string>(
     (pRes[0]?.values || []).map((r: any[]) => [r[0] as string, (r[1] as string) || ""])
   );
-  for (const s of sources) s.participant_names = namesBySource.get(s.id) || "";
+  for (const s of sources) {
+    s.participant_names = namesBySource.get(s.id) || "";
+    // Every conversation this source produced is just a redundant copy of one already
+    // present in an earlier import — nothing here is new. Import-scope pickers (Search,
+    // Media) use this to hide it so the same import doesn't show up twice; the Import
+    // page still lists it (with the duplicate badge) since it's never deleted.
+    s.is_duplicate_source = s.conversation_count > 0 && s.duplicate_conversation_count === s.conversation_count;
+  }
   return sources;
 }
 

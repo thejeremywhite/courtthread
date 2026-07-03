@@ -426,14 +426,19 @@ function SearchPageInner() {
 
   useEffect(() => {
     fetch("/api/sources").then((r) => r.json()).then((d) => {
-      const srcs = d.sources || [];
+      // Exclude sources whose every conversation is just a redundant copy of one already
+      // present in an earlier import (see is_duplicate_source in getSources) — otherwise
+      // the same import shows up twice in the picker with its own selectable id, doubling
+      // "select all" counts and message totals for no new data.
+      const srcs = (d.sources || []).filter((s: any) => !s.is_duplicate_source);
       setSources(srcs);
       // Do NOT auto-select imports. Selection is explicit: the page loads with
       // nothing selected (or whatever the restored session / conversation scope set),
       // and the user picks what to search. A refresh must not re-select everything.
       // PRUNE the restored selection against the LIVE import list: after a delete or
       // re-import the saved ids no longer exist, which left ghost scopes like a raw
-      // UUID chip / "1 import (0 msgs)" filtering every search down to nothing.
+      // UUID chip / "1 import (0 msgs)" filtering every search down to nothing. Also
+      // drops stale duplicate-source ids from a session saved before this filtering existed.
       const liveIds = new Set(srcs.map((s: SourceRow) => s.id));
       setSelectedSources((prev) => {
         const kept = new Set([...prev].filter((id) => liveIds.has(id)));

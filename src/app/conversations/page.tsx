@@ -95,7 +95,7 @@ export default function ConversationsPage() {
   }, [searchQuery, platformFilter, sourceFilter, sortOrder, dateFrom, dateTo, includedParticipants, excludedParticipants]);
 
   useEffect(() => {
-    fetch("/api/sources").then(r => r.json()).then(d => setSources(d.sources || [])).catch(() => {});
+    fetch("/api/sources").then(r => r.json()).then(d => setSources((d.sources || []).filter((s: any) => !s.is_duplicate_source))).catch(() => {});
   }, []);
 
   useEffect(() => {

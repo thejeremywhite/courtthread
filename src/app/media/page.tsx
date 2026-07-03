@@ -389,7 +389,10 @@ function MediaGalleryInner() {
 
   useEffect(() => {
     fetch("/api/sources").then((r) => r.json()).then((d) => {
-      const srcList: SourceRow[] = d.sources || [];
+      // Exclude sources whose every conversation is just a redundant copy of one already
+      // present in an earlier import (see is_duplicate_source in getSources) — otherwise
+      // the same import shows up twice in the picker, doubling media counts for no new data.
+      const srcList: SourceRow[] = (d.sources || []).filter((s: any) => !s.is_duplicate_source);
       setSources(srcList);
       const validIds = new Set(srcList.map((s) => s.id));
       setSelectedSources((prev) => {

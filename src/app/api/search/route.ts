@@ -94,6 +94,15 @@ export async function POST(request: NextRequest) {
     if (dateTo) {
       where += ` AND m.timestamp <= '${dateTo.replace(/'/g, "''")}'`;
     }
+    // Duplicate conversations (same export imported twice — see findDuplicateGroup) are
+    // never deleted or merged in the DB, so without this a search would surface the same
+    // message twice, once per copy. Keep only the most complete copy of each group.
+    where += ` AND m.conversation_id = (
+      SELECT c2.id FROM conversations c2, conversations c0
+      WHERE c0.id = m.conversation_id
+        AND COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c0.duplicate_group_id, c0.id)
+      ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
+    )`;
 
     const order = sortOrder === "desc" ? "DESC" : "ASC";
 
