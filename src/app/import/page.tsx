@@ -22,6 +22,7 @@ interface SourceRow {
   conversation_count: number;
   message_count: number;
   duplicate_conversation_count: number;
+  is_duplicate_source: boolean;
   metadata: string;
 }
 
@@ -334,6 +335,16 @@ export default function ImportPage() {
     } catch { /* ignore */ }
   }
 
+  async function handleDeleteDuplicates() {
+    const dupCount = sources.filter((s) => s.is_duplicate_source).length;
+    if (dupCount === 0) return;
+    if (!confirm(`Permanently delete ${dupCount} duplicate source${dupCount !== 1 ? "s" : ""} (the same export imported more than once)? The more complete copy of each is kept. This cannot be undone.`)) return;
+    try {
+      const res = await fetch("/api/sources/cleanup-duplicates", { method: "POST" });
+      if (res.ok) loadSources();
+    } catch { /* ignore */ }
+  }
+
   function platformLabel(fileType: string): { label: string; cls: string } {
     if (fileType.startsWith("facebook")) return { label: "Facebook", cls: "bg-blue-500/20 text-blue-400" };
     if (fileType === "sms-thread-txt" || fileType === "sms-xml") return { label: "SMS", cls: "bg-green-500/20 text-green-400" };
@@ -564,6 +575,7 @@ export default function ImportPage() {
 
         {sources.length > 0 && (() => {
           const emptyCount = sources.filter((s) => (s.message_count || 0) === 0).length;
+          const dupCount = sources.filter((s) => s.is_duplicate_source).length;
           const platforms = Array.from(new Set(sources.map((s) => platformLabel(s.file_type).label)));
           return (
             <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-[var(--border)] text-xs">
@@ -582,12 +594,21 @@ export default function ImportPage() {
                 <input type="checkbox" checked={hideEmptySources} onChange={(e) => setHideEmptySources(e.target.checked)} className="rounded" />
                 Hide empty
               </label>
-              {emptyCount > 0 && (
-                <button onClick={handleDeleteEmpty}
-                  className="ml-auto px-2 py-1 rounded border border-[var(--destructive)] text-[var(--destructive)] hover:bg-[var(--destructive)]/10 transition">
-                  Remove {emptyCount} empty
-                </button>
-              )}
+              <div className="ml-auto flex items-center gap-2">
+                {dupCount > 0 && (
+                  <button onClick={handleDeleteDuplicates}
+                    title="Deletes the redundant copy of each duplicate-imported conversation; the more complete copy is kept"
+                    className="px-2 py-1 rounded border border-[var(--destructive)] text-[var(--destructive)] hover:bg-[var(--destructive)]/10 transition">
+                    Remove {dupCount} duplicate{dupCount !== 1 ? "s" : ""}
+                  </button>
+                )}
+                {emptyCount > 0 && (
+                  <button onClick={handleDeleteEmpty}
+                    className="px-2 py-1 rounded border border-[var(--destructive)] text-[var(--destructive)] hover:bg-[var(--destructive)]/10 transition">
+                    Remove {emptyCount} empty
+                  </button>
+                )}
+              </div>
             </div>
           );
         })()}

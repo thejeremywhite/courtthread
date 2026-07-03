@@ -581,6 +581,44 @@ export async function deleteEmptySources(): Promise<number> {
   return ids.length;
 }
 
+// Delete every source whose EVERY conversation is a non-primary duplicate-group member
+// (see findDuplicateGroup / is_duplicate_source in getSources) — the same export imported
+// more than once, kept until now for provenance/audit via the Import page's duplicate
+// badge. This is a real, permanent, user-triggered delete (unlike the app-wide dedup
+// grouping elsewhere, which never touches the underlying rows). Returns count removed.
+export async function deleteDuplicateSources(): Promise<number> {
+  const db = await getDb();
+  const idsRes = db.exec(`
+    SELECT s.id FROM sources s
+    WHERE EXISTS (SELECT 1 FROM conversations c WHERE c.source_id = s.id)
+      AND NOT EXISTS (
+        SELECT 1 FROM conversations c WHERE c.source_id = s.id
+        AND c.id = (
+          SELECT c2.id FROM conversations c2
+          WHERE COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c.duplicate_group_id, c.id)
+          ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
+        )
+      )
+  `);
+  const ids: string[] = (idsRes[0]?.values || []).map((r: any[]) => r[0] as string);
+  if (ids.length === 0) return 0;
+  const inList = ids.map((id) => `'${id.replace(/'/g, "''")}'`).join(",");
+  db.run("BEGIN TRANSACTION");
+  try {
+    db.run(`DELETE FROM messages WHERE source_id IN (${inList})`);
+    db.run(`DELETE FROM conversation_participants WHERE conversation_id IN (SELECT id FROM conversations WHERE source_id IN (${inList}))`);
+    db.run(`DELETE FROM conversations WHERE source_id IN (${inList})`);
+    db.run(`DELETE FROM participants WHERE id NOT IN (SELECT DISTINCT participant_id FROM conversation_participants)`);
+    db.run(`DELETE FROM sources WHERE id IN (${inList})`);
+    db.run("COMMIT");
+  } catch (e) {
+    db.run("ROLLBACK");
+    throw e;
+  }
+  scheduleSave();
+  return ids.length;
+}
+
 export async function deleteSource(sourceId: string) {
   const db = await getDb();
   const safeId = sourceId.replace(/'/g, "''");
