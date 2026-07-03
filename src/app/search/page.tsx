@@ -1019,8 +1019,6 @@ function SearchPageInner() {
     return `${selectedSources.size} of ${sources.length} imports (${selectedMsgCount.toLocaleString()} msgs)`;
   })();
 
-  const sourceNames = sources.filter(s => selectedSources.has(s.id)).map(s => cleanSourceName(s.filename));
-
   return (
     <div>
       <h1 className="text-3xl font-bold mb-4">Search</h1>
@@ -1563,21 +1561,16 @@ function SearchPageInner() {
         );
       })()}
 
-      {results === null && !error && (
+      {results === null && conversationResults === null && !error && (
         <div className="rounded-lg border border-[var(--border)] bg-[var(--card)] p-8 text-center text-[var(--muted-foreground)]">
           <p className="mb-3">Enter a search term, or just pick an import / conversation / person and hit Search to browse everything in it (an empty box is treated as a wildcard).</p>
           {sources.length > 0 && selectedSources.size === 0 && selectedConversations.size === 0 && selectedParticipants.length === 0 && selectedSenders.size === 0 && (
             <p className="text-xs font-medium text-amber-500">Nothing selected yet — pick an import, conversation, or person to browse.</p>
           )}
           {sources.length > 0 && selectedSources.size > 0 && (
-            <div className="text-xs space-y-1">
-              <p className="font-medium text-[var(--foreground)]">
-                Searching {allSourcesSelected ? `all ${sources.length}` : `${selectedSources.size} of ${sources.length}`} imports ({selectedMsgCount.toLocaleString()} messages):
-              </p>
-              {sourceNames.map((name, i) => (
-                <p key={i}>{name}</p>
-              ))}
-            </div>
+            <p className="text-xs font-medium text-[var(--foreground)]">
+              Searching {allSourcesSelected ? `all ${sources.length}` : `${selectedSources.size} of ${sources.length}`} imports ({selectedMsgCount.toLocaleString()} messages)
+            </p>
           )}
           {sources.length === 0 && (
             <p className="text-xs">No data imported yet. <a href="/import" className="text-[var(--primary)] hover:underline">Import files</a> to get started.</p>
