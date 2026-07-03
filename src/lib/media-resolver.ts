@@ -131,11 +131,19 @@ export function resolveSourceDir(db: any, sourceId: string, ignorePersisted = fa
 
     // Exact relative-path match first: the browser folder picker preserves the export's
     // internal structure, so <searchDir>\<uploadRel> IS this convo's folder — also tried
-    // under Facebook's standard middles, because picking the "inbox"/"archived_threads"
-    // folder itself yields relative paths WITHOUT the "messages\" prefix that exists on
-    // disk (e.g. upload://archived_threads/x vs <export>\messages\archived_threads\x).
+    // under Facebook's standard middles, because picking a folder INSIDE the export (the
+    // "messages" folder, or "inbox"/"archived_threads" itself) yields relative paths
+    // missing whatever wrapper folders exist on disk above it. Facebook has used both
+    // "your_activity_across_facebook" and "your_facebook_activity" as the wrapper
+    // depending on export vintage (e.g. upload://messages/inbox/x sits on disk at
+    // <export>\your_facebook_activity\messages\inbox\x).
+    const FB_MIDDLES = [
+      "", "messages",
+      "your_facebook_activity", "your_facebook_activity\\messages",
+      "your_activity_across_facebook", "your_activity_across_facebook\\messages",
+    ];
     for (const sd of searchDirs) {
-      for (const mid of ["", "messages", "your_activity_across_facebook\\messages"]) {
+      for (const mid of FB_MIDDLES) {
         try {
           const direct = mid ? path.join(sd, mid, uploadRel) : path.join(sd, uploadRel);
           if (fs.existsSync(direct) && fs.statSync(direct).isDirectory()) return { dir: direct, needsPersist: true };
@@ -178,6 +186,17 @@ export function resolveSourceDir(db: any, sourceId: string, ignorePersisted = fa
         try {
           if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) return { dir: candidate, needsPersist: true };
         } catch {}
+      }
+
+      // Deep mode: the conversation folder can sit several wrappers below a search dir
+      // (e.g. <searchDir>\your_facebook_activity\messages\inbox\<folderName>) — a direct
+      // child join can't see it, so walk each search dir bounded. Deep-only because it
+      // reads directories recursively; runs at most once per source via dirCache/failCache.
+      if (deep) {
+        for (const sd of searchDirs) {
+          const found = findFolderBounded(sd, folderName, 5);
+          if (found) return { dir: found, needsPersist: true };
+        }
       }
     }
 
