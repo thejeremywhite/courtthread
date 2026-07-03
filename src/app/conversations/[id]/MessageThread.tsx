@@ -448,7 +448,11 @@ function ThreadLightbox({ seed, onClose, onNavigate }: { seed: LightboxMedia; on
     fetch("/api/media/browse", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversationIds: [seed.conversationId], sortOrder: "asc", page: 1, limit: 1000 }),
+      // This builds the FULL navigable list for one conversation, not a paginated gallery
+      // page — a hard 1000 cap silently dropped anything past it (a busy, years-long group
+      // chat can have several thousand media items), so photos beyond that point had no
+      // arrows and wouldn't even resolve as the seed item.
+      body: JSON.stringify({ conversationIds: [seed.conversationId], sortOrder: "asc", page: 1, limit: 20000 }),
     }).then((r) => r.json()).then((d) => {
       if (cancelled) return;
       const list: ThreadMediaItem[] = d.items || [];
