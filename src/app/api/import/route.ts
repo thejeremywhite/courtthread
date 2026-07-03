@@ -117,12 +117,24 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Some group-chat exports omit a member from the participant header even though their
+      // messages are still present (e.g. someone who left the group). Previously those
+      // senders got a throwaway id below with no matching participants row — every message
+      // from them then showed a blank sender name everywhere. Backfill a real participant
+      // row for anyone found only via their messages.
+      for (const msg of conv.messages) {
+        if (participantIds.has(msg.senderName)) continue;
+        const pid = uuidv4();
+        participantIds.set(msg.senderName, pid);
+        await insertParticipant({ id: pid, display_name: msg.senderName, is_owner: msg.senderName === ownerName ? 1 : 0 });
+        db.run(
+          `INSERT OR IGNORE INTO conversation_participants (conversation_id, participant_id) VALUES (?, ?)`,
+          [convId, pid]
+        );
+      }
+
       const dbMessages = conv.messages.map((msg, index) => {
-        let senderId = participantIds.get(msg.senderName);
-        if (!senderId) {
-          senderId = uuidv4();
-          participantIds.set(msg.senderName, senderId);
-        }
+        const senderId = participantIds.get(msg.senderName)!;
 
         return {
           id: uuidv4(),

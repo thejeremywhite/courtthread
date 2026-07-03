@@ -184,6 +184,88 @@ export async function backfillDuplicateGroups(): Promise<{
   return { groupsLinked, conversationsLinked, details };
 }
 
+// One-time (re-runnable) repair for a real parser bug: when a group-chat export omitted a
+// member from its participant header even though their messages were still present, the
+// import created a throwaway sender_id for them with NO matching participants row — every
+// message from that person then showed a blank sender name everywhere (Media grid,
+// conversation view, exports). insertConversation/importConversation now back this up going
+// forward; this repairs conversations already affected in the live database.
+//
+// The original name isn't stored anywhere on the orphaned message itself, so recovery works
+// by cross-referencing a duplicate-group SIBLING conversation (see findDuplicateGroup) that
+// has the same message (matched by truncated-to-the-second timestamp + content) WITH correct
+// sender attribution. Where no sibling has that message, the sender is unrecoverable and
+// gets a clearly-labeled placeholder instead of staying blank.
+export async function repairOrphanedSenders(): Promise<{
+  recovered: number;
+  unrecoverable: number;
+  details: Array<{ conversationId: string; conversationTitle: string; senderId: string; name: string; recovered: boolean }>;
+}> {
+  const db = await getDb();
+  const orphanRes = db.exec(`
+    SELECT DISTINCT m.conversation_id, m.sender_id, c.title
+    FROM messages m
+    JOIN conversations c ON c.id = m.conversation_id
+    WHERE m.sender_id NOT IN (SELECT id FROM participants)
+  `);
+  const orphans = (orphanRes[0]?.values || []).map((r: any[]) => ({
+    conversationId: r[0] as string, senderId: r[1] as string, conversationTitle: r[2] as string,
+  }));
+
+  let recovered = 0;
+  let unrecoverable = 0;
+  const details: Array<{ conversationId: string; conversationTitle: string; senderId: string; name: string; recovered: boolean }> = [];
+
+  for (const { conversationId, senderId, conversationTitle } of orphans) {
+    const safeConvId = conversationId.replace(/'/g, "''");
+    const safeSenderId = senderId.replace(/'/g, "''");
+    const { memberIds } = await getDuplicateGroupIds(conversationId);
+    const siblingIds = memberIds.filter((mid) => mid !== conversationId);
+
+    let recoveredName: string | null = null;
+    if (siblingIds.length > 0) {
+      // A handful of sample messages is enough to find one match — no need to check all
+      // (sometimes thousands) of this sender's messages in this conversation.
+      const sampleRes = db.exec(`
+        SELECT substr(timestamp, 1, 19), content FROM messages
+        WHERE conversation_id = '${safeConvId}' AND sender_id = '${safeSenderId}'
+        LIMIT 5
+      `);
+      const samples = sampleRes[0]?.values || [];
+      for (const sibId of siblingIds) {
+        const safeSibId = sibId.replace(/'/g, "''");
+        for (const [ts, content] of samples) {
+          const contentClause = content == null
+            ? "m2.content IS NULL"
+            : `m2.content = '${String(content).replace(/'/g, "''")}'`;
+          const matchRes = db.exec(`
+            SELECT p.display_name FROM messages m2
+            LEFT JOIN participants p ON m2.sender_id = p.id
+            WHERE m2.conversation_id = '${safeSibId}' AND substr(m2.timestamp, 1, 19) = '${ts}' AND ${contentClause}
+            LIMIT 1
+          `);
+          const name = matchRes[0]?.values?.[0]?.[0] as string | undefined;
+          if (name) { recoveredName = name; break; }
+        }
+        if (recoveredName) break;
+      }
+    }
+
+    const displayName = recoveredName || "Unknown participant (name lost at import)";
+    await insertParticipant({ id: senderId, display_name: displayName });
+    db.run(
+      `INSERT OR IGNORE INTO conversation_participants (conversation_id, participant_id) VALUES (?, ?)`,
+      [conversationId, senderId]
+    );
+
+    if (recoveredName) recovered++; else unrecoverable++;
+    details.push({ conversationId, conversationTitle, senderId, name: displayName, recovered: !!recoveredName });
+  }
+
+  scheduleSave();
+  return { recovered, unrecoverable, details };
+}
+
 export async function getMessages(
   conversationId: string,
   order: "ASC" | "DESC" = "ASC",
