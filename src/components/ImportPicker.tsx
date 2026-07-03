@@ -71,8 +71,14 @@ export function ImportPicker({ sources, selected, onChange, multi = true, placeh
         return sortBySize === "desc" ? diff : -diff;
       });
     }
+    // Already-selected imports float to the top — otherwise re-finding your handful of
+    // picks in a list of hundreds means scrolling/searching all over again every time
+    // the picker reopens.
+    if (multi && selected.size > 0) {
+      list.sort((a, b) => Number(selected.has(b.id)) - Number(selected.has(a.id)));
+    }
     return list;
-  }, [sources, query, sortBySize]);
+  }, [sources, query, sortBySize, selected, multi]);
 
   function toggle(id: string) {
     if (multi) {
