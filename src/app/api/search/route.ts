@@ -1,6 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 
+// A photo/video message has content IS NULL — its filename lives only in metadata's
+// media[].filename/localPath. Search needs to match against those too (e.g. locating a
+// specific photo by its filename or hash-like identifier), not just message text.
+function mediaFilenames(metadataJson: string | null): string[] {
+  if (!metadataJson) return [];
+  try {
+    const meta = JSON.parse(metadataJson);
+    if (!Array.isArray(meta?.media)) return [];
+    return meta.media.flatMap((m: any) => [m.filename, m.localPath].filter(Boolean));
+  } catch {
+    return [];
+  }
+}
+
+// Facebook (and others) export media under the file's short INTERNAL id — e.g.
+// "647682466327544.jpg" — while the browser shows the long CDN-served name when you open
+// the photo, something like "277911411_..._7496580356120897148_n_647682466327544.jpg". The
+// short exported name is always a substring of the long CDN one, but not vice versa, so a
+// plain "does the filename contain the query" check misses every search pasted from a
+// browser tab. Check both directions: does a filename contain the query, or does the
+// (much more specific) query contain a filename.
+function matchesMediaFilename(filenames: string[], query: string, matchCase: boolean): boolean {
+  const q = matchCase ? query : query.toLowerCase();
+  for (const f of filenames) {
+    const name = matchCase ? f : f.toLowerCase();
+    // Also compare without the extension — a query copied from a browser tab or the app's
+    // own search box commonly omits the trailing ".jpg"/".mp4", which would otherwise break
+    // the "query contains the short stored filename" direction.
+    const nameNoExt = name.replace(/\.[a-z0-9]{2,5}$/, "");
+    if (name.includes(q) || q.includes(name) || q.includes(nameNoExt)) return true;
+  }
+  return false;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const {
@@ -48,11 +82,15 @@ export async function POST(request: NextRequest) {
     let where = "WHERE 1=1";
 
     if (hasQuery) {
+      // Media-only messages (a photo/video with no caption) have content IS NULL — the
+      // filename lives only in metadata's media[].filename/localPath. A search for a
+      // filename (or any hash-like media identifier — common for locating a specific
+      // photo/video in context) must not exclude those rows up front.
       if (useRegex) {
-        where += " AND m.content IS NOT NULL";
+        where += " AND (m.content IS NOT NULL OR m.metadata LIKE '%\"filename\":%')";
       } else {
         const safeQuery = query.replace(/'/g, "''");
-        where += ` AND m.content LIKE '%${safeQuery}%'`;
+        where += ` AND (m.content LIKE '%${safeQuery}%' OR m.metadata LIKE '%${safeQuery}%')`;
       }
     }
 
@@ -94,15 +132,6 @@ export async function POST(request: NextRequest) {
     if (dateTo) {
       where += ` AND m.timestamp <= '${dateTo.replace(/'/g, "''")}'`;
     }
-    // Duplicate conversations (same export imported twice — see findDuplicateGroup) are
-    // never deleted or merged in the DB, so without this a search would surface the same
-    // message twice, once per copy. Keep only the most complete copy of each group.
-    where += ` AND m.conversation_id = (
-      SELECT c2.id FROM conversations c2, conversations c0
-      WHERE c0.id = m.conversation_id
-        AND COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c0.duplicate_group_id, c0.id)
-      ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
-    )`;
 
     const order = sortOrder === "desc" ? "DESC" : "ASC";
 
@@ -113,6 +142,16 @@ export async function POST(request: NextRequest) {
     // message matching the applied filters (date range, sender, included/excluded person),
     // with the matched date range and count — a compact summary instead of every message.
     if (!hasQuery) {
+      // This mode returns one row per CONVERSATION (see below), so — unlike the message-
+      // level search further down — duplicate-group copies really do need collapsing to
+      // just the most complete one here, or the same conversation shows up twice in the
+      // summary list (exactly the "88 imports" duplicate-picker bug from earlier).
+      const whereConvSummary = where + ` AND m.conversation_id = (
+        SELECT c2.id FROM conversations c2, conversations c0
+        WHERE c0.id = m.conversation_id
+          AND COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c0.duplicate_group_id, c0.id)
+        ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
+      )`;
       const convAgg = `
         SELECT m.conversation_id,
                COUNT(*) as matched_count,
@@ -120,7 +159,7 @@ export async function POST(request: NextRequest) {
                MAX(m.timestamp) as last_matched_at
         FROM messages m
         LEFT JOIN participants p ON m.sender_id = p.id
-        ${where}
+        ${whereConvSummary}
         GROUP BY m.conversation_id
       `;
       const convQuery = `
@@ -164,7 +203,8 @@ export async function POST(request: NextRequest) {
 
     const mainQuery = `
       SELECT m.*, p.display_name as sender_name, c.title as conversation_title,
-             s.file_type as source_file_type, s.metadata as source_metadata
+             s.file_type as source_file_type, s.metadata as source_metadata,
+             c.duplicate_group_id as conv_dup_group_id, c.message_count as conv_message_count
       FROM messages m
       LEFT JOIN participants p ON m.sender_id = p.id
       LEFT JOIN conversations c ON m.conversation_id = c.id
@@ -190,7 +230,9 @@ export async function POST(request: NextRequest) {
       try {
         const flags = matchCase ? "" : "i";
         const re = new RegExp(query, flags);
-        allRows = allRows.filter((row) => row.content && re.test(row.content));
+        allRows = allRows.filter((row) =>
+          re.test(row.content || "") || matchesMediaFilename(mediaFilenames(row.metadata), query, matchCase)
+        );
       } catch (e: any) {
         return NextResponse.json(
           { error: `Invalid regex: ${e.message}` },
@@ -198,6 +240,29 @@ export async function POST(request: NextRequest) {
         );
       }
     }
+
+    // Duplicate conversations (same export imported twice — see findDuplicateGroup) are
+    // never deleted or merged in the DB. Unlike the conversation-summary mode above, a
+    // message-level search must NOT just pick one copy and drop the other — a truncated
+    // copy can have real messages the "more complete" copy is missing (that's the whole
+    // "join them, never duplicate" point). So every copy stays in the candidate pool, and
+    // only EXACT content collisions between copies collapse to one result (preferring the
+    // more complete conversation's version), same signature logic as the conversation
+    // detail view's message union.
+    const seenSignatures = new Map<string, number>();
+    const deduped: any[] = [];
+    for (const row of allRows) {
+      const groupAnchor = row.conv_dup_group_id || row.conversation_id;
+      const key = `${groupAnchor}|${row.sender_name}|${String(row.timestamp).slice(0, 19)}|${row.content ?? ""}`;
+      const existingIdx = seenSignatures.get(key);
+      if (existingIdx === undefined) {
+        seenSignatures.set(key, deduped.length);
+        deduped.push(row);
+      } else if ((row.conv_message_count || 0) > (deduped[existingIdx].conv_message_count || 0)) {
+        deduped[existingIdx] = row;
+      }
+    }
+    allRows = deduped;
 
     const total = allRows.length;
     const matchedRows = allRows.slice(offset, offset + limit);
