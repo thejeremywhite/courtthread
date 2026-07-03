@@ -265,6 +265,20 @@ export default function ConversationPage() {
   }
 
   function toggleSort() {
+    // Explicitly changing sort direction means "browse the whole conversation from the
+    // true start/end now" — drop any message/date-range anchor from a prior "Show in
+    // conversation" jump, or the anchored load kept re-centering on that same spot no
+    // matter which direction was picked (this was a real, confusing bug: toggling
+    // Newest/Oldest first always reopened at the same anchored message).
+    if (highlightMessageId || highlightFrom) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("messageId");
+      params.delete("q");
+      params.delete("highlightFrom");
+      params.delete("highlightTo");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    }
     setSortDirection(prev => {
       const next = prev === "forward" ? "backward" : "forward";
       try { localStorage.setItem("courtthread_conv_sort", next); } catch { /* ignore */ }
