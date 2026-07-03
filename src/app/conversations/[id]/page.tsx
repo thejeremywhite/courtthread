@@ -100,6 +100,11 @@ export default function ConversationPage() {
   const pathname = usePathname();
   const highlightMessageId = searchParams.get("messageId") || "";
   const highlightTerm = searchParams.get("q") || "";
+  // Set when arriving from a date/filter-scoped search result (no single message to anchor
+  // on) — outlines the whole matched range instead of one message, and anchors the initial
+  // load to its start, WITHOUT truncating the thread the way filterDateFrom/To do.
+  const highlightFrom = searchParams.get("highlightFrom") || "";
+  const highlightTo = searchParams.get("highlightTo") || "";
 
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -132,12 +137,14 @@ export default function ConversationPage() {
     const params = new URLSearchParams();
     if (highlightMessageId) params.set("messageId", highlightMessageId);
     if (highlightTerm) params.set("q", highlightTerm);
+    if (highlightFrom) params.set("highlightFrom", highlightFrom);
+    if (highlightTo) params.set("highlightTo", highlightTo);
     if (filterSender) params.set("sender", filterSender);
     if (filterDateFrom) params.set("dateFrom", filterDateFrom);
     if (filterDateTo) params.set("dateTo", filterDateTo);
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [filterSender, filterDateFrom, filterDateTo, highlightMessageId, highlightTerm, pathname]);
+  }, [filterSender, filterDateFrom, filterDateTo, highlightMessageId, highlightTerm, highlightFrom, highlightTo, pathname]);
 
   useEffect(() => {
     fetch(`/api/conversations/${id}`)
@@ -157,13 +164,14 @@ export default function ConversationPage() {
       .catch(() => {});
   }, [id]);
 
-  const loadMessages = useCallback(async (cursor?: string, direction?: "forward" | "backward", anchorId?: string) => {
+  const loadMessages = useCallback(async (cursor?: string, direction?: "forward" | "backward", anchorId?: string, anchorTime?: string) => {
     const dir = direction || sortDirection;
     if (cursor) setLoadingMore(true); else setLoading(true);
     try {
       const params = new URLSearchParams({ limit: "200", direction: dir });
       if (cursor) params.set("cursor", cursor);
       else if (anchorId) params.set("anchor", anchorId);
+      else if (anchorTime) params.set("anchorTime", anchorTime);
       if (filterSender) params.set("sender", filterSender);
       if (filterDateFrom) params.set("dateFrom", filterDateFrom);
       if (filterDateTo) params.set("dateTo", filterDateTo);
@@ -184,14 +192,21 @@ export default function ConversationPage() {
     setMessages([]);
     setNextCursor(null);
     setScrolledToHighlight(false);
-    // If we arrived targeting a specific message and no filter is active, jump to it.
-    const useAnchor = highlightMessageId && !filterSender && !filterDateFrom && !filterDateTo;
-    loadMessages(undefined, sortDirection, useAnchor ? highlightMessageId : undefined);
-  }, [sortDirection, filterSender, filterDateFrom, filterDateTo, highlightMessageId]);
+    // If we arrived targeting a specific message, or a date-range from a filtered search
+    // result, and no truncating filter is active, jump straight there.
+    const useAnchor = (highlightMessageId || highlightFrom) && !filterSender && !filterDateFrom && !filterDateTo;
+    loadMessages(
+      undefined, sortDirection,
+      useAnchor && highlightMessageId ? highlightMessageId : undefined,
+      useAnchor && !highlightMessageId && highlightFrom ? highlightFrom : undefined
+    );
+  }, [sortDirection, filterSender, filterDateFrom, filterDateTo, highlightMessageId, highlightFrom]);
 
   useEffect(() => {
-    if (!scrolledToHighlight && highlightMessageId && messages.length > 0) {
-      const found = messages.find(m => m.id === highlightMessageId);
+    if (!scrolledToHighlight && (highlightMessageId || highlightFrom) && messages.length > 0) {
+      const found = highlightMessageId
+        ? messages.find(m => m.id === highlightMessageId)
+        : messages.find(m => m.timestamp >= highlightFrom && (!highlightTo || m.timestamp <= highlightTo));
       if (found) {
         setScrolledToHighlight(true);
         const tryScroll = (attempts: number) => {
@@ -211,7 +226,7 @@ export default function ConversationPage() {
         setTimeout(() => tryScroll(15), 50);
       }
     }
-  }, [messages, highlightMessageId, scrolledToHighlight]);
+  }, [messages, highlightMessageId, highlightFrom, highlightTo, scrolledToHighlight]);
 
   // Fires as the media lightbox arrows to a different message — scroll it into view so the
   // thread keeps pace with what's being previewed, instead of requiring "Show in
@@ -416,6 +431,7 @@ export default function ConversationPage() {
           onToggleBookmark={handleToggleBookmark}
           highlightText={highlightTerm}
           highlightMessageId={highlightMessageId}
+          highlightRange={highlightFrom ? { from: highlightFrom, to: highlightTo || highlightFrom } : undefined}
           highlightRef={highlightRef}
           className="p-4"
           viewMode={viewMode}

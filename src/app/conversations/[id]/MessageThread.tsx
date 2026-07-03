@@ -575,6 +575,7 @@ export function MessageThread({
   onToggleBookmark,
   highlightText: searchHighlight,
   highlightMessageId,
+  highlightRange,
   highlightRef,
   className,
   viewMode,
@@ -589,6 +590,11 @@ export function MessageThread({
   onToggleBookmark: (messageId: string) => void;
   highlightText?: string;
   highlightMessageId?: string;
+  // Outlines EVERY message in [from, to] (inclusive) instead of a single id — used when
+  // opening a conversation from a date/filter-scoped search result (see the Search page's
+  // conversation-summary cards), where we want the whole matched range visibly marked but
+  // the FULL conversation still loaded around it (no truncation, free scrolling either way).
+  highlightRange?: { from: string; to: string };
   highlightRef?: RefObject<HTMLDivElement | null>;
   className?: string;
   viewMode?: ViewMode;
@@ -601,6 +607,7 @@ export function MessageThread({
   const [lightboxItem, setLightboxItem] = useState<LightboxMedia | null>(null);
   let lastDate = "";
   const widthClass = viewMode ? VIEW_MODE_WIDTHS[viewMode] : "";
+  let rangeRefAssigned = false;
 
   return (
     <div className={`${className ?? "rounded-lg border border-[var(--border)] bg-[var(--card)] p-4"} ${widthClass} mx-auto overflow-hidden`}>
@@ -608,11 +615,17 @@ export function MessageThread({
         const msgDate = new Date(msg.timestamp).toDateString();
         const showDateSep = msgDate !== lastDate;
         lastDate = msgDate;
-        const isHighlighted = highlightMessageId === msg.id;
+        const isExactHighlighted = highlightMessageId === msg.id;
+        const inRange = !!highlightRange && msg.timestamp >= highlightRange.from && msg.timestamp <= highlightRange.to;
+        const isHighlighted = isExactHighlighted || inRange;
+        // Scroll-anchor goes on the exact message if one's given, otherwise the FIRST
+        // message that falls in the range (topmost in the currently loaded/sorted list).
+        const isScrollAnchor = isExactHighlighted || (inRange && !highlightMessageId && !rangeRefAssigned);
+        if (isScrollAnchor) rangeRefAssigned = true;
         return (
           <div key={msg.id}
             data-message-id={msg.id}
-            ref={isHighlighted ? highlightRef : undefined}
+            ref={isScrollAnchor ? highlightRef : undefined}
             className={isHighlighted ? "ring-2 ring-amber-400 rounded-lg" : ""}>
             {showDateSep && <DateSeparator date={msg.timestamp} />}
             <MessageBubble

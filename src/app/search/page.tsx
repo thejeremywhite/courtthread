@@ -1373,7 +1373,9 @@ function SearchPageInner() {
           {conversationResults !== null ? (
             <div className="space-y-2">
               {conversationResults.map((conv) => (
-                <a key={conv.id} href={`/conversations/${conv.id}`} target="_blank" rel="noopener noreferrer"
+                <a key={conv.id}
+                  href={`/conversations/${conv.id}?${new URLSearchParams({ highlightFrom: conv.first_matched_at, highlightTo: conv.last_matched_at })}`}
+                  target="_blank" rel="noopener noreferrer"
                   className="block rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 hover:border-[var(--primary)] transition">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">

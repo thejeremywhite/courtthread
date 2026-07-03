@@ -767,6 +767,24 @@ function MediaGalleryInner() {
     return `/api/media?sourceId=${encodeURIComponent(item.source_id)}&filename=${encodeURIComponent(filename)}&type=${item.media_type}`;
   }
 
+  // "Open full size" used to link straight to the raw /api/media file — a bare image byte
+  // stream with no caption, no conversation title, and no way back into the conversation.
+  // This opens a small viewer page instead that carries all of that context along.
+  function getFullSizeViewUrl(item: MediaItem): string {
+    const params = new URLSearchParams({
+      sourceId: item.source_id,
+      filename: item.original_filename || item.local_path.split(/[/\\]/).pop() || "",
+      type: item.media_type,
+      conversationId: item.conversation_id,
+      messageId: item.message_id,
+      timestamp: item.timestamp,
+      senderName: item.sender_name || "",
+    });
+    if (item.conversation_title) params.set("conversationTitle", item.conversation_title);
+    if (item.content) params.set("content", item.content);
+    return `/media/view?${params}`;
+  }
+
   function showInConversation(item: MediaItem) {
     // Open in a NEW TAB so the media gallery (scroll position, filters, the open preview)
     // is preserved — going back in the same tab lost the user's place entirely.
@@ -1123,13 +1141,16 @@ function MediaGalleryInner() {
               />
             )}
             <div className="absolute bottom-0 left-0 right-0 bg-black/70 px-4 py-2 text-white text-sm">
-              <p>{formatTime(lightboxItem.timestamp)} — <strong>{lightboxItem.sender_name}</strong></p>
+              <p>
+                {formatTime(lightboxItem.timestamp)} — <strong>{lightboxItem.sender_name}</strong>
+                {lightboxItem.conversation_title && <span className="text-white/70"> in {lightboxItem.conversation_title}</span>}
+              </p>
               {lightboxItem.content && <p className="text-white/70 truncate">{lightboxItem.content}</p>}
               <div className="flex gap-3 mt-1">
                 <button onClick={() => showInConversation(lightboxItem)} className="text-xs text-blue-400 hover:underline">
                   Show in conversation
                 </button>
-                <a href={getMediaUrl(lightboxItem)} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">
+                <a href={getFullSizeViewUrl(lightboxItem)} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400 hover:underline">
                   Open full size
                 </a>
               </div>

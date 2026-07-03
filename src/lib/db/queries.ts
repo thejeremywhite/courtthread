@@ -11,6 +11,14 @@ export async function getStats() {
   return { conversations, messages, participants, sources };
 }
 
+// Floors an epoch-ms timestamp to the nearest whole second. Different export formats round
+// sub-second precision differently for the SAME real message (one exporter keeps
+// milliseconds, another rounds to :000), so exact-ms equality misses most real duplicates —
+// used everywhere a message-content signature is built for duplicate detection.
+function toSecondMs(ms: number): number {
+  return Math.floor(ms / 1000) * 1000;
+}
+
 function rowsToObjects(result: any): any[] {
   if (!result || !result[0]) return [];
   const { columns, values } = result[0];
@@ -114,7 +122,7 @@ export async function backfillDuplicateGroups(): Promise<{
       `SELECT p.display_name, m.timestamp_ms, m.content FROM messages m
        LEFT JOIN participants p ON m.sender_id = p.id WHERE m.conversation_id = '${safeId}'`
     );
-    const set = new Set((res[0]?.values || []).map((r: any[]) => `${r[0]}|${r[1]}|${r[2] || ""}`));
+    const set = new Set((res[0]?.values || []).map((r: any[]) => `${r[0]}|${toSecondMs(r[1] as number)}|${r[2] || ""}`));
     sigCache.set(id, set);
     return set;
   };
@@ -344,7 +352,7 @@ export async function findDuplicateGroup(
   const candidates = (res[0]?.values || []).map((r: any[]) => ({ id: r[0] as string, groupId: r[1] as string | null }));
   if (candidates.length === 0) return null;
 
-  const incomingSigs = new Set(messages.map((m) => `${m.senderName}|${m.timestampMs}|${m.content || ""}`));
+  const incomingSigs = new Set(messages.map((m) => `${m.senderName}|${toSecondMs(m.timestampMs)}|${m.content || ""}`));
   const requiredOverlap = Math.min(DUPLICATE_MIN_OVERLAP, messages.length);
 
   for (const cand of candidates) {
@@ -357,7 +365,7 @@ export async function findDuplicateGroup(
     const candMsgs = mRes[0]?.values || [];
     let overlap = 0;
     for (const row of candMsgs) {
-      const sig = `${row[2]}|${row[0]}|${row[1] || ""}`;
+      const sig = `${row[2]}|${toSecondMs(row[0] as number)}|${row[1] || ""}`;
       if (incomingSigs.has(sig)) { overlap++; if (overlap >= requiredOverlap) break; }
     }
     if (overlap >= requiredOverlap) return cand.groupId || cand.id;

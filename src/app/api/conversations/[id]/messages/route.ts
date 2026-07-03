@@ -7,11 +7,15 @@ import { getDuplicateGroupIds } from "@/lib/db/queries";
 // occurrence. Rows are pre-sorted so the "primary" (most complete) copy's version wins ties.
 // Messages unique to a truncated copy have no matching signature and simply pass through —
 // this is the "join them, never duplicate" behavior.
+// Timestamp is truncated to whole seconds (first 19 chars of the ISO string, dropping
+// ".sssZ") because different export formats round sub-second precision differently for the
+// SAME real message — one copy's exporter keeps milliseconds, another rounds to :00 — so
+// exact-string equality alone missed most real duplicates.
 function dedupeMessageRows(rows: any[]): any[] {
   const seen = new Set<string>();
   const out: any[] = [];
   for (const row of rows) {
-    const key = `${row.sender_name}|${row.timestamp}|${row.content ?? ""}`;
+    const key = `${row.sender_name}|${String(row.timestamp).slice(0, 19)}|${row.content ?? ""}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(row);
@@ -34,6 +38,10 @@ export async function GET(
     const dateFrom = request.nextUrl.searchParams.get("dateFrom") || "";
     const dateTo = request.nextUrl.searchParams.get("dateTo") || "";
     const anchor = request.nextUrl.searchParams.get("anchor") || "";
+    // Jump straight to a timestamp instead of a specific message id — used when opening a
+    // conversation from a date/filter-scoped search result, where we know the matched range
+    // but not a specific message to anchor on.
+    const anchorTime = request.nextUrl.searchParams.get("anchorTime") || "";
 
     const { memberIds, primaryId } = await getDuplicateGroupIds(id);
     const isGrouped = memberIds.length > 1;
@@ -44,12 +52,17 @@ export async function GET(
     const primaryFirst = isGrouped ? `, CASE WHEN m.conversation_id = '${safePrimaryId}' THEN 0 ELSE 1 END` : "";
     const conversationFilter = isGrouped ? `m.conversation_id IN (${safeIds})` : `m.conversation_id = '${id.replace(/'/g, "''")}'`;
 
-    // Anchored load: jump to a specific message anywhere in the thread and return a
-    // window of messages around it (filters ignored — this is a direct jump).
-    if (anchor) {
-      const safeAnchor = anchor.replace(/'/g, "''");
-      const aRes = db.exec(`SELECT timestamp FROM messages WHERE id = '${safeAnchor}' AND ${conversationFilter}`);
-      const aTs = aRes[0]?.values[0]?.[0] as string | undefined;
+    // Anchored load: jump to a specific message (or a raw timestamp) anywhere in the thread
+    // and return a window of messages around it (filters ignored — this is a direct jump).
+    if (anchor || anchorTime) {
+      let aTs: string | undefined;
+      if (anchor) {
+        const safeAnchor = anchor.replace(/'/g, "''");
+        const aRes = db.exec(`SELECT timestamp FROM messages WHERE id = '${safeAnchor}' AND ${conversationFilter}`);
+        aTs = aRes[0]?.values[0]?.[0] as string | undefined;
+      } else {
+        aTs = anchorTime.replace(/'/g, "''");
+      }
       if (aTs) {
         const beforeWin = 20;
         const afterWin = Math.min(Math.max(limit, 50), 300);
@@ -76,7 +89,7 @@ export async function GET(
         const after = dedupeMessageRows(toObjs(afterRes)).slice(0, afterWin);
         const rows = [...before, ...after];
         const totalRes = isGrouped
-          ? db.exec(`SELECT COUNT(*) FROM (SELECT DISTINCT p.display_name, m.timestamp, m.content FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter})`)
+          ? db.exec(`SELECT COUNT(*) FROM (SELECT DISTINCT p.display_name, substr(m.timestamp,1,19), m.content FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter})`)
           : db.exec(`SELECT COUNT(*) FROM messages WHERE ${conversationFilter}`);
         const total = (totalRes[0]?.values[0]?.[0] as number) || 0;
         const hasMore = after.length >= afterWin;
@@ -141,7 +154,7 @@ export async function GET(
 
     let totalQuery: string;
     if (isGrouped) {
-      totalQuery = `SELECT COUNT(*) FROM (SELECT DISTINCT p.display_name, m.timestamp, m.content FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter}`;
+      totalQuery = `SELECT COUNT(*) FROM (SELECT DISTINCT p.display_name, substr(m.timestamp,1,19), m.content FROM messages m LEFT JOIN participants p ON m.sender_id = p.id WHERE ${conversationFilter}`;
       if (sender) totalQuery += ` AND p.display_name = '${sender.replace(/'/g, "''")}'`;
       if (dateFrom) totalQuery += ` AND m.timestamp >= '${dateFrom.replace(/'/g, "''")}'`;
       if (dateTo) totalQuery += ` AND m.timestamp <= '${dateTo.replace(/'/g, "''")}'`;

@@ -33,11 +33,15 @@ export async function GET(
     // Deduped message count across all copies in the duplicate group (see getDuplicateGroupIds) —
     // exact-duplicate messages (same sender/timestamp/content in two import copies) count once;
     // messages unique to a truncated copy still count, satisfying "join them, never duplicate".
+    // Timestamp is truncated to whole seconds (substr ...1,19 drops ".sssZ") because different
+    // export formats round sub-second precision differently for the SAME real message — one
+    // copy's exporter keeps milliseconds, another rounds to :00, so exact-string equality
+    // alone missed most real duplicates.
     let messageCount = conversation.message_count;
     if (memberIds.length > 1) {
       const countRes = db.exec(`
         SELECT COUNT(*) FROM (
-          SELECT DISTINCT p.display_name, m.timestamp, m.content
+          SELECT DISTINCT p.display_name, substr(m.timestamp, 1, 19), m.content
           FROM messages m LEFT JOIN participants p ON m.sender_id = p.id
           WHERE m.conversation_id IN (${safeIds})
         )

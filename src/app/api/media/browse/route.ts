@@ -170,7 +170,10 @@ export async function POST(request: NextRequest) {
         if (mediaTypeSet && !mediaTypeSet.has(resolvedType)) continue;
 
         const originalFilename = m.filename || m.localPath.split(/[/\\]/).pop() || null;
-        const dedupKey = `${groupAnchor}|${row.sender_name}|${row.timestamp}|${originalFilename}`;
+        // Timestamp truncated to whole seconds — see dedupeMessageRows in the conversation
+        // messages route for why (different export formats round sub-second precision
+        // differently for the SAME real message).
+        const dedupKey = `${groupAnchor}|${row.sender_name}|${String(row.timestamp).slice(0, 19)}|${originalFilename}`;
         const convMsgCount = row.conv_message_count || 0;
         const existing = dedupMap.get(dedupKey);
         if (existing && existing._convMsgCount >= convMsgCount) continue;
