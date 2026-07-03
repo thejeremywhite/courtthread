@@ -751,7 +751,10 @@ function SearchPageInner() {
 
   const hasSearchedRef = useRef(false);
   const autoSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  if (results !== null) hasSearchedRef.current = true;
+  // Wildcard/filters-only browsing returns conversationResults (results stays null — see
+  // handleSearch's data.mode === "conversations" branch), so this must check both or a
+  // filter change (e.g. the date range) after a query-less browse never re-searches.
+  if (results !== null || conversationResults !== null) hasSearchedRef.current = true;
 
   // After session restore, suppress auto-re-search for a tick so filter setters
   // don't each trigger a redundant search that clears the restored results.
@@ -1035,7 +1038,7 @@ function SearchPageInner() {
               placeholder={searchMode === "regex" ? "Enter regex pattern..." : "Search messages (use * as a wildcard)..."}
               className="w-full px-4 py-2 pr-8 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
             />
-            {(query || results !== null) && (
+            {(query || results !== null || conversationResults !== null) && (
               <button onClick={clearSearch}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--muted-foreground)] hover:text-[var(--foreground)] text-lg"
                 title="Clear search">
