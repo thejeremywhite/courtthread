@@ -217,15 +217,16 @@ export default function ImportPage() {
       }
       loadSources();
     } catch (e: any) {
-      // "Failed to fetch" with a healthy server = the browser killed the request before it
-      // left (Brave 150's HTTPS-upgrade breaks multipart POSTs to http://localhost with
-      // ERR_ALPN_NEGOTIATION_FAILED). HSTS/upgrade state is keyed by hostname, so the
-      // 127.0.0.1 origin bypasses it without touching browser settings.
-      if (e instanceof TypeError && window.location.hostname === "localhost") {
+      // "Failed to fetch" (a TypeError) with a healthy server = the request died inside
+      // the browser before any bytes were sent (seen as ERR_ALPN_NEGOTIATION_FAILED —
+      // a stale cached protocol/socket for this origin). Give the recovery options
+      // instead of a dead-end message.
+      if (e instanceof TypeError) {
         setError(
-          "The browser blocked this upload before it reached the server (Brave's HTTPS upgrade " +
-          "breaks uploads to http://localhost). Open the app at http://127.0.0.1:" +
-          window.location.port + " and retry — or import by folder path from the Quick tab instead."
+          "The upload never reached the server — the browser refused the connection " +
+          "(stale cached connection state for this address). Try: restart the browser " +
+          "(brave://restart), or open the app via http://127.0.0.1:" + window.location.port +
+          ", or import by folder path from the Quick tab."
         );
       } else {
         setError(e.message);
