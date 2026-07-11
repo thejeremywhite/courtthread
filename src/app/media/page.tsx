@@ -918,6 +918,17 @@ function MediaGalleryInner() {
             className="w-44"
           />
 
+          {/* Sent by — narrows to media THAT PERSON SENT (sender match), unlike "Search
+              person" which includes every conversation they're merely part of. Same
+              sender filter the Search page applies via senderNames. */}
+          <PersonSearch
+            placeholder="Sent by..."
+            sourceId={selectedSources.size === 1 ? Array.from(selectedSources)[0] : undefined}
+            conversationId={selectedConversations.size === 1 ? Array.from(selectedConversations)[0] : undefined}
+            onSelect={(p) => setSelectedSenders((prev) => new Set(prev).add(p.display_name))}
+            className="w-44"
+          />
+
           {/* Platform dropdown */}
           {allPlatforms.length > 1 && (
             <select
@@ -998,14 +1009,24 @@ function MediaGalleryInner() {
           </button>
         </div>
 
-        {/* Included / excluded people */}
-        {(includedParticipants.length > 0 || excludedParticipants.length > 0) && (
+        {/* Included / excluded people + sender filters */}
+        {(includedParticipants.length > 0 || excludedParticipants.length > 0 || selectedSenders.size > 0) && (
           <div className="flex flex-wrap gap-1.5">
             {includedParticipants.map((p) => (
               <PersonChip key={p.id} person={p} onRemove={() => removeIncludedPerson(p.id)} />
             ))}
             {excludedParticipants.map((p) => (
               <PersonChip key={p.id} person={p} tone="destructive" onRemove={() => removeExcludedPerson(p.id)} />
+            ))}
+            {Array.from(selectedSenders).map((name) => (
+              <span key={name} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border bg-[var(--accent)]/10 text-[var(--accent)] border-[var(--accent)]/30">
+                <span className="font-semibold uppercase tracking-wide text-[10px] opacity-80">Sent by</span>
+                {name}
+                <button
+                  onClick={() => setSelectedSenders((prev) => { const next = new Set(prev); next.delete(name); return next; })}
+                  className="hover:opacity-70" title="Remove"
+                >×</button>
+              </span>
             ))}
           </div>
         )}

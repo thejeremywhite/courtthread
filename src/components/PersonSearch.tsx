@@ -102,10 +102,11 @@ export function PersonSearch({ placeholder, sourceId, conversationId, excludeIds
 // Small removable chip for a selected include/exclude person — consistent look across
 // the three pages that use PersonSearch. Labeled explicitly (not just colored) so it's
 // unambiguous at a glance which it is.
-export function PersonChip({ person, onRemove, tone = "primary" }: {
+export function PersonChip({ person, onRemove, tone = "primary", label }: {
   person: PersonSuggestion;
   onRemove: () => void;
   tone?: "primary" | "destructive";
+  label?: string; // overrides the default Include/Exclude prefix (e.g. "Sent by")
 }) {
   const toneClass = tone === "destructive"
     ? "bg-red-500/10 text-red-400 border-red-500/30"
@@ -113,7 +114,7 @@ export function PersonChip({ person, onRemove, tone = "primary" }: {
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs border ${toneClass}`}>
       <span className="font-semibold uppercase tracking-wide text-[10px] opacity-80">
-        {tone === "destructive" ? "Exclude" : "Include"}
+        {label ?? (tone === "destructive" ? "Exclude" : "Include")}
       </span>
       {person.display_name}
       <button onClick={onRemove} className="hover:opacity-70" title="Remove">×</button>
