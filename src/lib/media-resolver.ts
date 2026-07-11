@@ -214,7 +214,11 @@ export function resolveSourceDir(db: any, sourceId: string, ignorePersisted = fa
 // "SMS Attachments" / "Original Media" are the phone-extract folders — attachments
 // referenced by bubble-html conversations live there, at the import root or with
 // SMS Attachments nested inside Original Media.
-const EXTRACT_MEDIA_DIRS = ["SMS Attachments", "Original Media", "Original Media/SMS Attachments"];
+const EXTRACT_MEDIA_DIRS = [
+  "SMS Attachments", "Original Media", "Original Media/SMS Attachments",
+  "../SMS Attachments", "../../SMS Attachments",
+  "../Original Media/SMS Attachments", "../../Original Media/SMS Attachments",
+];
 export function subdirsForType(mediaType: string): string[] {
   return mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used", ...EXTRACT_MEDIA_DIRS]
     : mediaType === "video" ? ["videos", ...EXTRACT_MEDIA_DIRS]
@@ -250,8 +254,15 @@ export function cachedSourceDir(db: any, sourceId: string): string | null {
 // EVERY other page's requests (10-15s sidebar navigation while media loaded).
 const fileIndexCache = new Map<string, { at: number; files: Map<string, string> }>();
 // "SMS Attachments" may sit at the extract root OR nested under "Original Media"
-// (Jeremy reorganized the folder on 2026-07-11) — index both spots.
-const MEDIA_SUBDIRS = ["photos", "videos", "audio", "gifs", "stickers", "stickers_used", "files", "SMS Attachments", "Original Media", "Original Media/SMS Attachments"];
+// (Jeremy reorganized the folder on 2026-07-11) — index both spots. The "../" variants
+// cover per-thread sources whose own folder is HTML/<thread>/ inside the extract: the
+// shared attachment folders live two levels above the thread folder.
+const MEDIA_SUBDIRS = [
+  "photos", "videos", "audio", "gifs", "stickers", "stickers_used", "files",
+  "SMS Attachments", "Original Media", "Original Media/SMS Attachments",
+  "../SMS Attachments", "../../SMS Attachments",
+  "../Original Media/SMS Attachments", "../../Original Media/SMS Attachments",
+];
 export function sourceFileIndex(dir: string, sourceId: string): Map<string, string> {
   const hit = fileIndexCache.get(sourceId);
   if (hit && Date.now() - hit.at < FAIL_TTL_MS) return hit.files;

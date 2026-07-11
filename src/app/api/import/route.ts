@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { parseFile, parseDirectory } from "@/lib/parsers";
+import { parseFile, parseDirectory, detectFileType } from "@/lib/parsers";
 import {
   insertSource,
   insertConversation,
@@ -31,23 +31,6 @@ export async function POST(request: NextRequest) {
     const stat = fs.statSync(importPath);
     const isDir = stat.isDirectory();
 
-    const sourceId = uuidv4();
-    const checksum = isDir
-      ? crypto.createHash("md5").update(importPath).digest("hex")
-      : crypto.createHash("md5").update(fs.readFileSync(importPath)).digest("hex");
-
-    await insertSource({
-      id: sourceId,
-      filename: path.basename(importPath),
-      file_path: importPath,
-      file_type: isDir ? "directory" : path.extname(importPath).slice(1),
-      file_size: isDir ? 0 : stat.size,
-      checksum,
-      metadata: JSON.stringify({ imported_from: importPath, provenance: importMetadata || {} }),
-      case_id: caseId,
-      section_id: sectionId,
-    });
-
     let result;
     if (isDir) {
       result = await parseDirectory(importPath, ownerName);
@@ -70,9 +53,49 @@ export async function POST(request: NextRequest) {
     let conversationsImported = 0;
     let messagesImported = 0;
 
+    // One SOURCE per message FILE — the same shape browser uploads have always produced
+    // (each thread its own entry on the Import page and in the import pickers). A whole
+    // directory import previously became ONE opaque source ("Messages · 90,304 msgs"),
+    // which made the per-import pickers useless for narrowing by person or thread.
+    const sourceIdByFile = new Map<string, string>();
+    const allSourceIds: string[] = [];
+    async function sourceIdForFile(srcFile: string): Promise<string> {
+      const existing = sourceIdByFile.get(srcFile);
+      if (existing) return existing;
+      const id = uuidv4();
+      let size = 0;
+      let checksum = "";
+      let head = "";
+      try {
+        size = fs.statSync(srcFile).size;
+        const buf = fs.readFileSync(srcFile);
+        checksum = crypto.createHash("md5").update(buf).digest("hex");
+        head = buf.subarray(0, 4096).toString("utf-8");
+      } catch {
+        checksum = crypto.createHash("md5").update(srcFile).digest("hex");
+      }
+      const parent = path.basename(path.dirname(srcFile));
+      const filename = parent && parent !== "." ? `${parent}/${path.basename(srcFile)}` : path.basename(srcFile);
+      await insertSource({
+        id,
+        filename,
+        file_path: srcFile,
+        file_type: detectFileType(srcFile, head),
+        file_size: size,
+        checksum,
+        metadata: JSON.stringify({ imported_from: importPath, provenance: importMetadata || {} }),
+        case_id: caseId,
+        section_id: sectionId,
+      });
+      sourceIdByFile.set(srcFile, id);
+      allSourceIds.push(id);
+      return id;
+    }
+
     for (const conv of result.conversations) {
       if (conv.messages.length === 0) continue;
 
+      const sourceId = await sourceIdForFile(conv.sourceFile || importPath);
       const convId = uuidv4();
 
       const participantIds = new Map<string, string>();
@@ -172,7 +195,7 @@ export async function POST(request: NextRequest) {
     // messages on the right (the parse-time ownerName default can't know whose archive
     // this is — e.g. importing someone else's export while ownerName is still "Jeremy
     // White").
-    const detectedOwner = conversationsImported > 0 ? await detectAndApplyOwner([sourceId]) : null;
+    const detectedOwner = conversationsImported > 0 ? await detectAndApplyOwner(allSourceIds) : null;
 
     return NextResponse.json({
       success: true,
