@@ -4,12 +4,12 @@ import { parseFacebookHtml, parseFacebookHtmlDirectory } from "./facebook-html";
 import { parseSmsXml, parseCallsXml } from "./sms-xml";
 import { parseFacebookTxt } from "./facebook-txt";
 import { parseSmsThreadTxt, isSmsThreadTxt } from "./sms-thread-txt";
-import { parseAnytransCsv } from "./anytrans-csv";
-import { parseAnytransHtml } from "./anytrans-html";
+import { parsePhoneCsv } from "./phone-csv";
+import { parseBubbleHtml } from "./bubble-html";
 import fs from "fs";
 import path from "path";
 
-export type FileType = "facebook-json" | "facebook-html" | "facebook-txt" | "sms-thread-txt" | "sms-xml" | "calls-xml" | "anytrans-csv" | "anytrans-html" | "unknown";
+export type FileType = "facebook-json" | "facebook-html" | "facebook-txt" | "sms-thread-txt" | "sms-xml" | "calls-xml" | "phone-csv" | "bubble-html" | "unknown";
 
 export function detectFileType(filePath: string, content?: string): FileType {
   const ext = path.extname(filePath).toLowerCase();
@@ -41,17 +41,17 @@ export function detectFileType(filePath: string, content?: string): FileType {
   }
 
   if (ext === ".html" || ext === ".htm") {
-    // AnyTrans/MobiMover phone-extract "Bubble" HTML — distinctive bubble CSS classes and
+    // Phone-extract "Bubble" HTML — distinctive bubble CSS classes and
     // per-message date lines that Facebook exports never contain.
     if (content && content.includes("triangle-isosceles") && content.includes("<p class='date'>Date:")) {
-      return "anytrans-html";
+      return "bubble-html";
     }
     return "facebook-html";
   }
 
   if (ext === ".csv") {
     if (content && content.includes('"ID","Name","Phone Number","Message","Date Time"')) {
-      return "anytrans-csv";
+      return "phone-csv";
     }
   }
 
@@ -110,13 +110,13 @@ export async function parseFile(
         conversations.push(conv);
         break;
       }
-      case "anytrans-csv": {
-        const conv = parseAnytransCsv(content, filePath, ownerName);
+      case "phone-csv": {
+        const conv = parsePhoneCsv(content, filePath, ownerName);
         conversations.push(conv);
         break;
       }
-      case "anytrans-html": {
-        const conv = parseAnytransHtml(content, filePath, ownerName);
+      case "bubble-html": {
+        const conv = parseBubbleHtml(content, filePath, ownerName);
         conversations.push(conv);
         break;
       }
@@ -216,7 +216,7 @@ export async function parseDirectory(
       for (const e of errors) result.errors.push({ file: fullPath, error: e });
     }
 
-    // AnyTrans/MobiMover phone-extract thread files (one conversation per file). Facebook's
+    // Phone-extract thread files (one conversation per file). Facebook's
     // message_N.html files are grouped and parsed above; other stray .html (index pages,
     // style assets) are intentionally ignored.
     if (/-bubble\.html?$/i.test(entry)) {

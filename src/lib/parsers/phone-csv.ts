@@ -169,7 +169,7 @@ function loadContacts(contactsDir: string) {
   return contactsCache;
 }
 
-export function parseAnytransCsv(
+export function parsePhoneCsv(
   content: string,
   sourceFile: string,
   ownerName: string
@@ -217,7 +217,7 @@ export function parseAnytransCsv(
 
     const isIncoming = messageTypeRaw.toLowerCase() === "received";
     
-    // In group chats, MobiMover CSVs lack specific sender attribution in the row,
+    // In group chats, these CSVs lack specific sender attribution in the row,
     // so we fall back to the resolved list of contacts or the title.
     let senderName = isIncoming ? resolvedContacts[0] : ownerName;
     

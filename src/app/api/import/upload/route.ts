@@ -4,6 +4,8 @@ import { parseFacebookHtml, parseFacebookHtmlDirectory } from "@/lib/parsers/fac
 import { parseSmsXml, parseCallsXml } from "@/lib/parsers/sms-xml";
 import { parseFacebookTxt } from "@/lib/parsers/facebook-txt";
 import { parseSmsThreadTxt } from "@/lib/parsers/sms-thread-txt";
+import { parseBubbleHtml } from "@/lib/parsers/bubble-html";
+import { parsePhoneCsv } from "@/lib/parsers/phone-csv";
 import { detectFileType } from "@/lib/parsers";
 import {
   insertSource,
@@ -206,7 +208,16 @@ export async function POST(request: NextRequest) {
           case "sms-thread-txt":
             conversations = [parseSmsThreadTxt(content, file.name, ownerName, file.name)];
             break;
+          case "bubble-html":
+            conversations = [parseBubbleHtml(content, file.name, ownerName)];
+            break;
+          case "phone-csv":
+            conversations = [parsePhoneCsv(content, file.name, ownerName)];
+            break;
           default:
+            // The source row was already inserted above — remove it or every rejected
+            // file leaves a permanent empty source behind.
+            await deleteSource(sourceId);
             errors.push({ file: file.name, error: `Unsupported file type: ${fileType}` });
             continue;
         }

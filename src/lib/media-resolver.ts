@@ -212,7 +212,7 @@ export function resolveSourceDir(db: any, sourceId: string, ignorePersisted = fa
 }
 
 // "SMS Attachments" / "Original Media" are the phone-extract folders — attachments
-// referenced by anytrans-html conversations live there, at the import root or with
+// referenced by bubble-html conversations live there, at the import root or with
 // SMS Attachments nested inside Original Media.
 const EXTRACT_MEDIA_DIRS = ["SMS Attachments", "Original Media", "Original Media/SMS Attachments"];
 export function subdirsForType(mediaType: string): string[] {

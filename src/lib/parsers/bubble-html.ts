@@ -1,7 +1,7 @@
 import { NormalizedMessage, ParsedConversation, MediaAttachment, MessageType } from "@/types/message";
 import path from "path";
 
-// Parser for AnyTrans/MobiMover-style "Bubble" HTML exports of a phone's SMS/iMessage
+// Parser for phone-extract "Bubble" HTML exports of a phone's SMS/iMessage
 // threads (Messages/HTML/<thread>/<thread>-<numbers>(<count>)-Bubble.html).
 //
 // Real format (verified against Patricia Mann's E:\MessageExtracts export):
@@ -61,7 +61,7 @@ function mediaTypeForFile(filename: string): string {
   return "file";
 }
 
-export function parseAnytransHtml(
+export function parseBubbleHtml(
   content: string,
   sourceFile: string,
   ownerName: string
@@ -172,6 +172,6 @@ export function parseAnytransHtml(
     participants: Array.from(participantSet),
     messages,
     sourceFile,
-    metadata: { anytrans: true, raw_contacts: rawContacts, owner: headerOwner },
+    metadata: { bubble_html: true, raw_contacts: rawContacts, owner: headerOwner },
   };
 }
