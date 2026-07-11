@@ -119,7 +119,10 @@ export function parseAnytransHtml(
     const imgRegex = /<img[^>]*src=["']([^"']+)["'][^>]*>/gi;
     let img: RegExpExecArray | null;
     while ((img = imgRegex.exec(bubbleRaw)) !== null) {
-      const src = decodeEntities(img[1]);
+      let src = decodeEntities(img[1]);
+      // srcs are URL-encoded (%20, %E2%80%AF …) but the files on disk have the literal
+      // characters — without decoding, every such attachment resolves as missing.
+      try { src = decodeURIComponent(src); } catch { /* malformed escape — keep raw */ }
       if (/(^|\/)Bubble\//i.test(src)) continue;
       const localPath = src.replace(/^(\.\.\/)+/, "").replace(/^\.\//, "");
       media.push({

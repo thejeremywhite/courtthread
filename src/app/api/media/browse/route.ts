@@ -221,7 +221,8 @@ export async function POST(request: NextRequest) {
         } catch { idx = null; }
         idxBySource.set(it.source_id, idx);
       }
-      it.missing = idx ? !idx.has((it.original_filename || "").toLowerCase()) : true;
+      const fn = it.original_filename || "";
+      it.missing = idx ? !(idx.has(fn) || idx.has(fn.toLowerCase())) : true;
     };
 
     let pool = allItems;

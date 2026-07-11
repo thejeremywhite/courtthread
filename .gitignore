@@ -50,3 +50,6 @@ node-portable.zip
 # MemPalace
 .mcp.json
 data/backups/
+
+# Derived case-data reports (personal data - never commit)
+data/reports/

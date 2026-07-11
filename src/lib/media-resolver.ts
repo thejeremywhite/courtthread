@@ -211,13 +211,15 @@ export function resolveSourceDir(db: any, sourceId: string, ignorePersisted = fa
   }
 }
 
+// "SMS Attachments" / "Original Media" are the AnyTrans phone-extract folders — attachments
+// referenced by anytrans-html conversations live there, directly under the imported root.
 export function subdirsForType(mediaType: string): string[] {
-  return mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used"]
-    : mediaType === "video" ? ["videos"]
-    : mediaType === "audio" ? ["audio"]
+  return mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used", "SMS Attachments", "Original Media"]
+    : mediaType === "video" ? ["videos", "SMS Attachments", "Original Media"]
+    : mediaType === "audio" ? ["audio", "SMS Attachments", "Original Media"]
     : mediaType === "sticker" ? ["stickers", "stickers_used", "photos"]
     : mediaType === "gif" ? ["gifs", "photos"]
-    : ["photos", "gifs", "stickers", "stickers_used", "videos", "audio", "files"];
+    : ["photos", "gifs", "stickers", "stickers_used", "videos", "audio", "files", "SMS Attachments", "Original Media"];
 }
 
 export function findFile(sourceDir: string, filename: string, subdirs: string[]): string | null {
@@ -245,20 +247,28 @@ export function cachedSourceDir(db: any, sourceId: string): string | null {
 // existsSync calls per browse request were blocking Node's single thread, which stalled
 // EVERY other page's requests (10-15s sidebar navigation while media loaded).
 const fileIndexCache = new Map<string, { at: number; files: Map<string, string> }>();
-const MEDIA_SUBDIRS = ["photos", "videos", "audio", "gifs", "stickers", "stickers_used", "files"];
+const MEDIA_SUBDIRS = ["photos", "videos", "audio", "gifs", "stickers", "stickers_used", "files", "SMS Attachments", "Original Media"];
 export function sourceFileIndex(dir: string, sourceId: string): Map<string, string> {
   const hit = fileIndexCache.get(sourceId);
   if (hit && Date.now() - hit.at < FAIL_TTL_MS) return hit.files;
-  const files = new Map<string, string>(); // lowercased filename -> absolute path
+  // Keyed by BOTH the exact filename and its lowercased form. Exact keys win: phone
+  // extracts can hold two DIFFERENT photos whose names differ only by extension case
+  // (IMG_5426.PNG vs IMG_5426.png referenced by different messages) — a lowercase-only
+  // index silently served one photo for both. Lowercase keys remain as fallback for
+  // refs whose case doesn't match any file exactly.
+  const files = new Map<string, string>();
+  const lowered = new Map<string, string>();
   for (const sub of ["", ...MEDIA_SUBDIRS]) {
     const d = sub ? path.join(dir, sub) : dir;
     try {
       for (const f of fs.readdirSync(d)) {
+        if (!files.has(f)) files.set(f, path.join(d, f));
         const k = f.toLowerCase();
-        if (!files.has(k)) files.set(k, path.join(d, f));
+        if (!lowered.has(k)) lowered.set(k, path.join(d, f));
       }
     } catch { /* subdir absent */ }
   }
+  for (const [k, v] of lowered) if (!files.has(k)) files.set(k, v);
   fileIndexCache.set(sourceId, { at: Date.now(), files });
   return files;
 }

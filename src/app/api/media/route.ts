@@ -29,9 +29,12 @@ export async function GET(request: NextRequest) {
 
     const subdirs = subdirsForType(mediaType);
 
-    // In-memory file index first (zero fs syscalls); findFile as fallback.
-    let filePath = sourceDir
-      ? (sourceFileIndex(sourceDir, sourceId).get(filename.toLowerCase()) || findFile(sourceDir, filename, subdirs))
+    // In-memory file index first (zero fs syscalls); findFile as fallback. Exact-case
+    // lookup before lowercased — same-stem files differing only by case are DIFFERENT
+    // photos in phone extracts.
+    const idx = sourceDir ? sourceFileIndex(sourceDir, sourceId) : null;
+    let filePath = idx
+      ? (idx.get(filename) || idx.get(filename.toLowerCase()) || findFile(sourceDir!, filename, subdirs))
       : null;
     let usedDir = sourceDir;
 
