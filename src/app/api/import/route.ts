@@ -15,7 +15,10 @@ import path from "path";
 
 export async function POST(request: NextRequest) {
   try {
-    const { path: importPath, ownerName = "Jeremy White", importMetadata, caseId = null, sectionId = null } = await request.json();
+    const { path: rawPath, ownerName = "Jeremy White", importMetadata, caseId = null, sectionId = null } = await request.json();
+
+    // Windows "Copy as path" wraps paths in quotes — accept them as-is.
+    const importPath = (rawPath || "").trim().replace(/^["']+|["']+$/g, "").trim();
 
     if (!importPath) {
       return NextResponse.json({ error: "Path is required" }, { status: 400 });

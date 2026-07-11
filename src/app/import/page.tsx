@@ -177,8 +177,10 @@ export default function ImportPage() {
   }
 
   function handlePathImport() {
-    if (!importPath.trim()) return;
-    setPendingImport({ type: "path", path: importPath, label: importPath.split(/[/\\]/).pop() || importPath });
+    // Windows "Copy as path" wraps the path in quotes — strip them so a straight paste works.
+    const cleaned = importPath.trim().replace(/^["']+|["']+$/g, "").trim();
+    if (!cleaned) return;
+    setPendingImport({ type: "path", path: cleaned, label: cleaned.split(/[/\\]/).pop() || cleaned });
   }
 
   async function executeImport(metadata: ImportMetadata) {
