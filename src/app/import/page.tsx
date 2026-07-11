@@ -58,6 +58,7 @@ export default function ImportPage() {
   const [importPath, setImportPath] = useState("");
   const [ownerName, setOwnerName] = useState("Jeremy White");
   const [importing, setImporting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sources, setSources] = useState<SourceRow[]>([]);
@@ -155,13 +156,19 @@ export default function ImportPage() {
 
   function handleFileUpload(files: FileList | File[]) {
     if (!files || files.length === 0) return;
-    const validExts = [".json", ".xml", ".txt", ".html", ".htm", ".zip"];
+    const validExts = [".json", ".xml", ".txt", ".html", ".htm", ".zip", ".csv"];
+    // Media/asset folders inside phone extracts and FB exports hold no message files —
+    // a parent-folder pick must not drag their tens of thousands of files into the upload.
+    const skipDirs = /(^|\/)(Original Media|SMS Attachments|Bubble|photos|videos|gifs|audio|stickers|stickers_used|files)(\/|$)/i;
     const fileArr = Array.from(files).filter((f) => {
       const ext = f.name.toLowerCase().match(/\.[^.]+$/)?.[0] || "";
-      return validExts.includes(ext);
+      if (!validExts.includes(ext)) return false;
+      const rel = (f as any).webkitRelativePath || "";
+      if (rel && skipDirs.test(rel)) return false;
+      return true;
     });
     if (fileArr.length === 0) {
-      setError("No supported files found. Accepted formats: JSON, XML, TXT, HTML, ZIP");
+      setError("No supported files found. Accepted formats: JSON, XML, TXT, HTML, CSV, ZIP");
       return;
     }
     setError(null);
@@ -187,18 +194,58 @@ export default function ImportPage() {
 
     try {
       if (current.type === "files" && current.files) {
-        const formData = new FormData();
-        formData.append("ownerName", ownerName);
-        formData.append("importMetadata", metaJson);
-        if (selectedCase) formData.append("caseId", selectedCase);
-        if (selectedSection) formData.append("sectionId", selectedSection);
-        for (const file of Array.from(current.files)) {
-          formData.append("files", file);
+        // One giant multipart request (a whole-folder pick = hundreds of files) gets killed
+        // by the browser before it ever leaves (instant net error; single-file uploads on
+        // the same page succeed). Send small sequential batches instead — each the size of
+        // an upload that demonstrably works — with per-batch retry and visible progress.
+        const all = Array.from(current.files);
+        const BATCH_BYTES = 16 * 1024 * 1024;
+        const BATCH_FILES = 25;
+        const batches: File[][] = [];
+        let cur: File[] = [];
+        let curBytes = 0;
+        for (const f of all) {
+          if (cur.length > 0 && (curBytes + f.size > BATCH_BYTES || cur.length >= BATCH_FILES)) {
+            batches.push(cur); cur = []; curBytes = 0;
+          }
+          cur.push(f); curBytes += f.size;
         }
-        const res = await fetch("/api/import/upload", { method: "POST", body: formData });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
-        setImportResult(data);
+        if (cur.length > 0) batches.push(cur);
+
+        const agg: ImportResult = {
+          success: true,
+          stats: { filesProcessed: 0, conversationsImported: 0, messagesImported: 0, skippedEmpty: 0 },
+          emptyFiles: [],
+          errors: [],
+        };
+        for (let bi = 0; bi < batches.length; bi++) {
+          if (batches.length > 1) setUploadProgress(`Uploading batch ${bi + 1} of ${batches.length} (${agg.stats.messagesImported.toLocaleString()} messages so far)…`);
+          const formData = new FormData();
+          formData.append("ownerName", ownerName);
+          formData.append("importMetadata", metaJson);
+          if (selectedCase) formData.append("caseId", selectedCase);
+          if (selectedSection) formData.append("sectionId", selectedSection);
+          for (const file of batches[bi]) formData.append("files", file);
+
+          let res: Response | null = null;
+          let lastErr: unknown = null;
+          for (let attempt = 0; attempt < 3 && !res; attempt++) {
+            if (attempt > 0) await new Promise((r) => setTimeout(r, 600 * attempt));
+            try { res = await fetch("/api/import/upload", { method: "POST", body: formData }); }
+            catch (e) { lastErr = e; }
+          }
+          if (!res) throw lastErr;
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error);
+          agg.stats.filesProcessed += data.stats?.filesProcessed || 0;
+          agg.stats.conversationsImported += data.stats?.conversationsImported || 0;
+          agg.stats.messagesImported += data.stats?.messagesImported || 0;
+          agg.stats.skippedEmpty = (agg.stats.skippedEmpty || 0) + (data.stats?.skippedEmpty || 0);
+          if (data.emptyFiles?.length) agg.emptyFiles!.push(...data.emptyFiles);
+          if (data.errors?.length) agg.errors.push(...data.errors);
+        }
+        setUploadProgress(null);
+        setImportResult(agg);
       } else if (current.type === "path" && current.path) {
         const res = await fetch("/api/import", {
           method: "POST",
@@ -233,6 +280,7 @@ export default function ImportPage() {
       }
     } finally {
       setImporting(false);
+      setUploadProgress(null);
     }
   }
 
@@ -509,6 +557,11 @@ export default function ImportPage() {
       )}
 
       {/* Result / Error */}
+      {uploadProgress && (
+        <div className="rounded-lg border border-[var(--primary)] bg-[var(--primary)]/10 p-3">
+          <p className="text-sm text-[var(--primary)] animate-pulse">{uploadProgress}</p>
+        </div>
+      )}
       {error && (
         <div className="rounded-lg border border-[var(--destructive)] bg-[var(--destructive)]/10 p-3">
           <p className="text-sm text-[var(--destructive)]">{error}</p>
