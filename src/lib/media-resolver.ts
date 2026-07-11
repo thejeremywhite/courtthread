@@ -211,15 +211,17 @@ export function resolveSourceDir(db: any, sourceId: string, ignorePersisted = fa
   }
 }
 
-// "SMS Attachments" / "Original Media" are the AnyTrans phone-extract folders — attachments
-// referenced by anytrans-html conversations live there, directly under the imported root.
+// "SMS Attachments" / "Original Media" are the phone-extract folders — attachments
+// referenced by anytrans-html conversations live there, at the import root or with
+// SMS Attachments nested inside Original Media.
+const EXTRACT_MEDIA_DIRS = ["SMS Attachments", "Original Media", "Original Media/SMS Attachments"];
 export function subdirsForType(mediaType: string): string[] {
-  return mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used", "SMS Attachments", "Original Media"]
-    : mediaType === "video" ? ["videos", "SMS Attachments", "Original Media"]
-    : mediaType === "audio" ? ["audio", "SMS Attachments", "Original Media"]
+  return mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used", ...EXTRACT_MEDIA_DIRS]
+    : mediaType === "video" ? ["videos", ...EXTRACT_MEDIA_DIRS]
+    : mediaType === "audio" ? ["audio", ...EXTRACT_MEDIA_DIRS]
     : mediaType === "sticker" ? ["stickers", "stickers_used", "photos"]
     : mediaType === "gif" ? ["gifs", "photos"]
-    : ["photos", "gifs", "stickers", "stickers_used", "videos", "audio", "files", "SMS Attachments", "Original Media"];
+    : ["photos", "gifs", "stickers", "stickers_used", "videos", "audio", "files", ...EXTRACT_MEDIA_DIRS];
 }
 
 export function findFile(sourceDir: string, filename: string, subdirs: string[]): string | null {
@@ -247,7 +249,9 @@ export function cachedSourceDir(db: any, sourceId: string): string | null {
 // existsSync calls per browse request were blocking Node's single thread, which stalled
 // EVERY other page's requests (10-15s sidebar navigation while media loaded).
 const fileIndexCache = new Map<string, { at: number; files: Map<string, string> }>();
-const MEDIA_SUBDIRS = ["photos", "videos", "audio", "gifs", "stickers", "stickers_used", "files", "SMS Attachments", "Original Media"];
+// "SMS Attachments" may sit at the extract root OR nested under "Original Media"
+// (Jeremy reorganized the folder on 2026-07-11) — index both spots.
+const MEDIA_SUBDIRS = ["photos", "videos", "audio", "gifs", "stickers", "stickers_used", "files", "SMS Attachments", "Original Media", "Original Media/SMS Attachments"];
 export function sourceFileIndex(dir: string, sourceId: string): Map<string, string> {
   const hit = fileIndexCache.get(sourceId);
   if (hit && Date.now() - hit.at < FAIL_TTL_MS) return hit.files;
