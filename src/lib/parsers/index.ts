@@ -4,10 +4,12 @@ import { parseFacebookHtml, parseFacebookHtmlDirectory } from "./facebook-html";
 import { parseSmsXml, parseCallsXml } from "./sms-xml";
 import { parseFacebookTxt } from "./facebook-txt";
 import { parseSmsThreadTxt, isSmsThreadTxt } from "./sms-thread-txt";
+import { parseAnytransCsv } from "./anytrans-csv";
+import { parseAnytransHtml } from "./anytrans-html";
 import fs from "fs";
 import path from "path";
 
-export type FileType = "facebook-json" | "facebook-html" | "facebook-txt" | "sms-thread-txt" | "sms-xml" | "calls-xml" | "unknown";
+export type FileType = "facebook-json" | "facebook-html" | "facebook-txt" | "sms-thread-txt" | "sms-xml" | "calls-xml" | "anytrans-csv" | "anytrans-html" | "unknown";
 
 export function detectFileType(filePath: string, content?: string): FileType {
   const ext = path.extname(filePath).toLowerCase();
@@ -39,7 +41,18 @@ export function detectFileType(filePath: string, content?: string): FileType {
   }
 
   if (ext === ".html" || ext === ".htm") {
+    // AnyTrans/MobiMover phone-extract "Bubble" HTML — distinctive bubble CSS classes and
+    // per-message date lines that Facebook exports never contain.
+    if (content && content.includes("triangle-isosceles") && content.includes("<p class='date'>Date:")) {
+      return "anytrans-html";
+    }
     return "facebook-html";
+  }
+
+  if (ext === ".csv") {
+    if (content && content.includes('"ID","Name","Phone Number","Message","Date Time"')) {
+      return "anytrans-csv";
+    }
   }
 
   return "unknown";
@@ -97,6 +110,16 @@ export async function parseFile(
         conversations.push(conv);
         break;
       }
+      case "anytrans-csv": {
+        const conv = parseAnytransCsv(content, filePath, ownerName);
+        conversations.push(conv);
+        break;
+      }
+      case "anytrans-html": {
+        const conv = parseAnytransHtml(content, filePath, ownerName);
+        conversations.push(conv);
+        break;
+      }
       default:
         errors.push(`Unknown file type: ${filePath}`);
     }
@@ -107,9 +130,17 @@ export async function parseFile(
   return { conversations, errors };
 }
 
+// Directories that are pure media/asset storage — no parseable message files inside, and
+// some (a phone extract's "Original Media") can hold 100k+ files, so never descend.
+const SKIP_RECURSE_DIRS = new Set([
+  "original media", "sms attachments", "bubble", "contacts",
+  "photos", "videos", "gifs", "audio", "stickers", "stickers_used", "files",
+]);
+
 export async function parseDirectory(
   dirPath: string,
-  ownerName: string
+  ownerName: string,
+  depth = 0
 ): Promise<ImportResult> {
   const result: ImportResult = {
     conversations: [],
@@ -178,7 +209,17 @@ export async function parseDirectory(
     const fullPath = path.join(dirPath, entry);
     const ext = path.extname(entry).toLowerCase();
 
-    if ([".xml", ".txt"].includes(ext)) {
+    if ([".xml", ".txt", ".csv"].includes(ext)) {
+      const { conversations, errors } = await parseFile(fullPath, ownerName);
+      result.stats.filesProcessed++;
+      result.conversations.push(...conversations);
+      for (const e of errors) result.errors.push({ file: fullPath, error: e });
+    }
+
+    // AnyTrans/MobiMover phone-extract thread files (one conversation per file). Facebook's
+    // message_N.html files are grouped and parsed above; other stray .html (index pages,
+    // style assets) are intentionally ignored.
+    if (/-bubble\.html?$/i.test(entry)) {
       const { conversations, errors } = await parseFile(fullPath, ownerName);
       result.stats.filesProcessed++;
       result.conversations.push(...conversations);
@@ -194,6 +235,22 @@ export async function parseDirectory(
       } catch (e: any) {
         result.errors.push({ file: fullPath, error: `ZIP error: ${e.message}` });
       }
+    }
+  }
+
+  // Recurse into subdirectories (bounded) — phone extracts nest threads two levels down
+  // (Messages/HTML/<thread>/x-Bubble.html) and Facebook exports nest conversation folders
+  // under messages/inbox etc. Media/asset dirs are skipped wholesale.
+  if (depth < 6) {
+    for (const entry of entries) {
+      if (entry.startsWith(".") || entry.startsWith("$")) continue;
+      if (SKIP_RECURSE_DIRS.has(entry.toLowerCase())) continue;
+      const fullPath = path.join(dirPath, entry);
+      try { if (!fs.statSync(fullPath).isDirectory()) continue; } catch { continue; }
+      const sub = await parseDirectory(fullPath, ownerName, depth + 1);
+      result.conversations.push(...sub.conversations);
+      result.errors.push(...sub.errors);
+      result.stats.filesProcessed += sub.stats.filesProcessed;
     }
   }
 
@@ -309,7 +366,7 @@ export async function scanForFiles(
       }
 
       const ext = path.extname(entry).toLowerCase();
-      if ([".json", ".xml", ".txt", ".html", ".htm", ".zip"].includes(ext)) {
+      if ([".json", ".xml", ".txt", ".html", ".htm", ".zip", ".csv"].includes(ext)) {
         const type = ext === ".zip" ? "unknown" as FileType : detectFileType(fullPath);
         files.push({ path: fullPath, type, size: stat.size });
       }
