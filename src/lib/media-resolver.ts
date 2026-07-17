@@ -219,13 +219,16 @@ const EXTRACT_MEDIA_DIRS = [
   "../SMS Attachments", "../../SMS Attachments",
   "../Original Media/SMS Attachments", "../../Original Media/SMS Attachments",
 ];
+// Facebook's shared sticker folder sits at the messages level, two levels above a thread
+// folder — try both parent hops as well as the direct child.
+const STICKER_DIRS = ["stickers", "stickers_used", "../stickers_used", "../../stickers_used"];
 export function subdirsForType(mediaType: string): string[] {
-  return mediaType === "image" ? ["photos", "gifs", "stickers", "stickers_used", ...EXTRACT_MEDIA_DIRS]
+  return mediaType === "image" ? ["photos", "gifs", ...STICKER_DIRS, ...EXTRACT_MEDIA_DIRS]
     : mediaType === "video" ? ["videos", ...EXTRACT_MEDIA_DIRS]
     : mediaType === "audio" ? ["audio", ...EXTRACT_MEDIA_DIRS]
-    : mediaType === "sticker" ? ["stickers", "stickers_used", "photos"]
+    : mediaType === "sticker" ? [...STICKER_DIRS, "photos"]
     : mediaType === "gif" ? ["gifs", "photos"]
-    : ["photos", "gifs", "stickers", "stickers_used", "videos", "audio", "files", ...EXTRACT_MEDIA_DIRS];
+    : ["photos", "gifs", ...STICKER_DIRS, "videos", "audio", "files", ...EXTRACT_MEDIA_DIRS];
 }
 
 export function findFile(sourceDir: string, filename: string, subdirs: string[]): string | null {
@@ -262,6 +265,10 @@ const MEDIA_SUBDIRS = [
   "SMS Attachments", "Original Media", "Original Media/SMS Attachments",
   "../SMS Attachments", "../../SMS Attachments",
   "../Original Media/SMS Attachments", "../../Original Media/SMS Attachments",
+  // Facebook keeps stickers in ONE shared folder at the messages level, not per thread —
+  // from a thread folder (messages/inbox/<thread>) that's two levels up. Without these,
+  // stickers never resolved for thread-scoped sources.
+  "../stickers_used", "../../stickers_used",
 ];
 export function sourceFileIndex(dir: string, sourceId: string): Map<string, string> {
   const hit = fileIndexCache.get(sourceId);
