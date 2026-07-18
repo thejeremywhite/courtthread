@@ -164,7 +164,22 @@ export default function ConversationPage() {
       .catch(() => {});
   }, [id]);
 
+  // React state updates from setLoadingMore() are async — the IntersectionObserver can
+  // fire again (the sentinel often stays intersecting until the DOM grows) before a
+  // re-render lands, reading the OLD "false" closure value and firing a second concurrent
+  // fetch for the same cursor. That produced two copies of every message in that page —
+  // duplicate React keys, and (per Jeremy) "oldest first doesn't give me all the messages"
+  // once the duplicated array confused rendering/scroll. A ref is mutated synchronously,
+  // so it closes the race the state guard couldn't.
+  const loadingMoreRef = useRef(false);
   const loadMessages = useCallback(async (cursor?: string, direction?: "forward" | "backward", anchorId?: string, anchorTime?: string) => {
+    // Only guard the infinite-scroll continuation (cursor set) — a fresh/anchor load
+    // (filter or sort change) must always be allowed to proceed and supersede whatever
+    // pagination fetch might still be in flight.
+    if (cursor) {
+      if (loadingMoreRef.current) return;
+      loadingMoreRef.current = true;
+    }
     const dir = direction || sortDirection;
     if (cursor) setLoadingMore(true); else setLoading(true);
     try {
@@ -178,7 +193,15 @@ export default function ConversationPage() {
       const res = await fetch(`/api/conversations/${id}/messages?${params}`);
       const data = await res.json();
       if (res.ok) {
-        setMessages((prev) => cursor ? [...prev, ...data.messages] : data.messages);
+        setMessages((prev) => {
+          if (!cursor) return data.messages;
+          // Defensive backstop: two DIFFERENT real messages can share the same
+          // second-level timestamp (this dataset has no sub-second precision) and
+          // straddle a page boundary — dedupe by id so a boundary tie can never
+          // duplicate a row even if the race above is somehow re-introduced.
+          const seen = new Set(prev.map((m: any) => m.id));
+          return [...prev, ...data.messages.filter((m: any) => !seen.has(m.id))];
+        });
         setTotalMessages(data.total);
         setHasMore(data.hasMore);
         setNextCursor(data.nextCursor);
@@ -186,12 +209,16 @@ export default function ConversationPage() {
     } catch { /* ignore */ }
     setLoading(false);
     setLoadingMore(false);
+    if (cursor) loadingMoreRef.current = false;
   }, [id, sortDirection, filterSender, filterDateFrom, filterDateTo]);
 
   useEffect(() => {
     setMessages([]);
     setNextCursor(null);
     setScrolledToHighlight(false);
+    // A filter/sort change supersedes any pagination fetch still in flight from before —
+    // don't let its guard permanently block future scroll-loads once it lands.
+    loadingMoreRef.current = false;
     // If we arrived targeting a specific message, or a date-range from a filtered search
     // result, and no truncating filter is active, jump straight there.
     const useAnchor = (highlightMessageId || highlightFrom) && !filterSender && !filterDateFrom && !filterDateTo;
