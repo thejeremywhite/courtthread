@@ -150,7 +150,10 @@ export async function GET(
 
     const hasMore = rows.length > limit;
     if (hasMore) rows = rows.slice(0, limit);
-    if (direction === "backward") rows.reverse();
+    // Rows are already in the requested display order (ASC for forward/oldest-first, DESC
+    // for backward/newest-first) — do NOT reverse. A `rows.reverse()` used to run here
+    // unconditionally, silently flipping "backward" back to ascending before it ever
+    // reached the client — the sort toggle changed the button label and nothing else.
 
     let totalQuery: string;
     if (isGrouped) {
@@ -171,10 +174,11 @@ export async function GET(
     const totalResult = db.exec(totalQuery);
     const total = (totalResult[0]?.values[0]?.[0] as number) || 0;
 
-    // For backward mode, rows are reversed (oldest first after reverse).
-    // The cursor must be the oldest timestamp (rows[0]) so the next page
-    // fetches messages OLDER than the oldest we already have.
-    const cursorRow = direction === "backward" ? rows[0] : rows[rows.length - 1];
+    // Rows are unreversed now (see above) — the last array element is always the trailing
+    // boundary of this page in whichever direction it was fetched (oldest-of-page for
+    // backward/DESC, newest-of-page for forward/ASC), which is exactly what the next
+    // page's cursor comparison (`< cursor` / `> cursor`) needs to continue from.
+    const cursorRow = rows[rows.length - 1];
     return NextResponse.json({
       messages: rows,
       total,
