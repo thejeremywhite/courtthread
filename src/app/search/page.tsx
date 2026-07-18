@@ -788,7 +788,7 @@ function SearchPageInner() {
     return () => { if (autoSearchTimerRef.current) clearTimeout(autoSearchTimerRef.current); };
   }, [matchCase, dateFrom, dateTo, contextLines, contextMode, contextDirection, sortOrder, searchMode,
       selectedSources.size, selectedPlatforms.size, selectedParticipants.length,
-      selectedConversations.size, selectedSenders.size]);
+      selectedConversations.size, selectedSenders.size, excludedParticipants.length]);
 
   useEffect(() => {
     const observer = new IntersectionObserver((entries) => {
