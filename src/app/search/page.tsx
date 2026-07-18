@@ -462,7 +462,8 @@ function SearchPageInner() {
     }).catch(() => {});
   }, []);
 
-  // Populate the sender options from the participants of the scoped conversation(s)
+  // Populate the sender options from the participants of the scoped conversation(s), BEFORE
+  // a search has run (e.g. a specific conversation was explicitly checked in the dropdown).
   useEffect(() => {
     if (cameFromConversationRef.current) return; // handled by the mount fetch above
     if (selectedConversations.size === 0) return;
@@ -478,6 +479,29 @@ function SearchPageInner() {
       if (names.size > 0) setSenderOptions(Array.from(names).sort());
     }).catch(() => {});
   }, [selectedConversations]);
+
+  // Re-derive sender options from whatever a search ACTUALLY returned — this is the scope
+  // that matters, and it's the only thing that reliably covers every way scope narrows
+  // (import selection, wildcard browse, person include/exclude), not just the explicit
+  // Conversations-dropdown checkboxes above. Without this, the dropdown just kept showing
+  // whatever was cached in localStorage from an unrelated earlier session/scope — e.g.
+  // still listing 4 names from a conversation you'd long since navigated away from.
+  useEffect(() => {
+    if (conversationResults !== null) {
+      const names = new Set<string>();
+      for (const c of conversationResults) {
+        if (c.participant_names) for (const n of c.participant_names.split(",")) {
+          const t = n.trim();
+          if (t) names.add(t);
+        }
+      }
+      setSenderOptions(Array.from(names).sort());
+    } else if (results !== null) {
+      const names = new Set<string>();
+      for (const r of results) if (r.sender_name) names.add(r.sender_name);
+      setSenderOptions(Array.from(names).sort());
+    }
+  }, [conversationResults, results]);
 
   useEffect(() => {
     if (selectedSources.size === 0) {
