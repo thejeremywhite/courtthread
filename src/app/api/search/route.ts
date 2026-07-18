@@ -146,12 +146,27 @@ export async function POST(request: NextRequest) {
       // level search further down — duplicate-group copies really do need collapsing to
       // just the most complete one here, or the same conversation shows up twice in the
       // summary list (exactly the "88 imports" duplicate-picker bug from earlier).
-      const whereConvSummary = where + ` AND m.conversation_id = (
-        SELECT c2.id FROM conversations c2, conversations c0
-        WHERE c0.id = m.conversation_id
-          AND COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c0.duplicate_group_id, c0.id)
-        ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
-      )`;
+      //
+      // The "which copy is primary" check used to run as a correlated subquery attached
+      // directly to the per-MESSAGE where clause — evaluated once per matching message row
+      // (up to 200k+ at Jeremy's current scale) instead of once per conversation (~1k).
+      // sql.js runs synchronously on Node's single thread, so that didn't just make this
+      // endpoint slow, it froze the ENTIRE server for the duration — every other request
+      // (search person, sources, everything) queued up behind it and looked broken/stuck.
+      // Compute the small non-primary-id set ONCE here (one pass over conversations) and
+      // fold it into a plain NOT IN, which is a cheap indexed lookup like excludeConversationIds.
+      const nonPrimaryRes = db.exec(`
+        SELECT c.id FROM conversations c
+        WHERE c.id != (
+          SELECT c2.id FROM conversations c2
+          WHERE COALESCE(c2.duplicate_group_id, c2.id) = COALESCE(c.duplicate_group_id, c.id)
+          ORDER BY c2.message_count DESC, c2.id ASC LIMIT 1
+        )
+      `);
+      const nonPrimaryIds: string[] = (nonPrimaryRes[0]?.values || []).map((r: any[]) => r[0] as string);
+      const whereConvSummary = nonPrimaryIds.length > 0
+        ? where + ` AND m.conversation_id NOT IN (${nonPrimaryIds.map((id) => `'${id.replace(/'/g, "''")}'`).join(",")})`
+        : where;
       const convAgg = `
         SELECT m.conversation_id,
                COUNT(*) as matched_count,
